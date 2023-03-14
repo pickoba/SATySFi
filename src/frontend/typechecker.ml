@@ -104,7 +104,7 @@ let add_optionals_to_type_environment ~(cons : label ranged -> mono_type -> 'a -
       let tyenv =
         let ventry =
           {
-            val_type  = Poly(Primitives.option_type pbeta);
+            val_type  = Poly(Primitives.option_type pbeta, []);
             val_name  = Some(evid);
             val_stage = pre.stage;
           }
@@ -418,7 +418,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
             in
             return (ventry.val_type, e)
       in
-      let tyfree = TypeConv.instantiate pre.level pre.quantifiability pty in
+      let (tyfree, _) = TypeConv.instantiate pre.level pre.quantifiability pty in
       let tyres = TypeConv.overwrite_range_of_type tyfree rng in
       return (e, tyres)
 
@@ -448,7 +448,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
         let tyenv =
           let ventry =
             {
-              val_type  = Poly(rng_var, BaseType(bsty_var));
+              val_type  = Poly((rng_var, BaseType(bsty_var)), []);
               val_name  = Some(evid_ctx);
               val_stage = pre.stage;
             }
@@ -488,7 +488,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
         let tyenv_sub =
           let ventry =
             {
-              val_type  = Poly(rng_var, BaseType(bsty_var));
+              val_type  = Poly((rng_var, BaseType(bsty_var)), []);
               val_name  = Some(evid_ctx);
               val_stage = pre.stage;
             }
@@ -535,7 +535,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
       let tyenv =
         let ventry =
           {
-            val_type  = Poly(rng_ctx_var, BaseType(bsty_ctx_var));
+            val_type  = Poly((rng_ctx_var, BaseType(bsty_ctx_var)), []);
             val_name  = Some(evid_ctx);
             val_stage = pre.stage;
           }
@@ -551,7 +551,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
             let (rng_sub_var, varnm_sub) = ident_sub in
             let (rng_sup_var, varnm_sup) = ident_sup in
             let pty_script rng =
-              Poly(rng, snd (Primitives.option_type (Range.dummy "sub-or-sup", BaseType(MathTextType))))
+              Poly((rng, snd (Primitives.option_type (Range.dummy "sub-or-sup", BaseType(MathTextType)))), [])
             in
             let ventry_sub =
               {
@@ -655,7 +655,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
         let pty =
           if is_nonexpansive_expression e1 then
           (* If `e1` is polymorphically typeable: *)
-            TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1)
+            TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1) []
           else
           (* If `e1` should be typed monomorphically: *)
             TypeConv.lift_poly (TypeConv.erase_range_of_type ty1)
@@ -1211,7 +1211,7 @@ and typecheck_letrec (pre : pre) (tyenv : Typeenv.t) (utrecbinds : untyped_let_b
 
   let tuples =
     tupleacc |> Alist.to_list |> List.map (fun (varnm, ty, evid, recbind) ->
-      let pty = TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty) in
+      let pty = TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty) [] in
       (varnm, pty, evid, recbind)
     )
   in

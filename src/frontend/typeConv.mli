@@ -10,13 +10,13 @@ val unlink : mono_type -> mono_type
 
 val get_opaque_type : type_scheme -> TypeID.t option
 
-val generalize : level -> mono_type -> poly_type
+val generalize : level -> mono_type -> mono_type_constraint list -> poly_type
 
 val generalize_macro_type : mono_macro_type -> poly_macro_type
 
 val lift_poly : mono_type -> poly_type
 
-val instantiate : level -> quantifiability -> poly_type -> mono_type
+val instantiate : level -> quantifiability -> poly_type -> mono_type * mono_type_constraint list
 
 val instantiate_by_map_mono :  mono_type BoundIDMap.t -> poly_type -> mono_type
 
@@ -37,3 +37,5 @@ val poly_type_equal : poly_type -> poly_type -> bool
 val normalize_mono_row : mono_row -> normalized_mono_row
 
 val normalized_poly_row_equal : normalized_poly_row -> normalized_poly_row -> bool
+
+val apply_constraints_poly : level -> quantifiability -> poly_type -> (poly_type, TypeError.unification_error) result

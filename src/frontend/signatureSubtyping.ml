@@ -123,7 +123,7 @@ and substitute_concrete (subst : substitution) (modsig : signature) : signature 
       ConcStructure(ssig)
 
 
-and substitute_poly_type (subst : substitution) (Poly(pty) : poly_type) : poly_type =
+and substitute_poly_type (subst : substitution) (Poly(pty, cons) : poly_type) : poly_type =
   let rec aux (rng, ptymain) =
     let ptymain =
       match ptymain with
@@ -161,8 +161,12 @@ and substitute_poly_type (subst : substitution) (Poly(pty) : poly_type) : poly_t
                       (* arity mismatch; this cannot happen *)
                       assert false
 
-                  | Some(Poly((_, ptymain))) ->
+                  | Some(Poly((_, ptymain), [])) ->
                       ptymain
+                  
+                  | _ ->
+                      (* TED: Poly type should not have constraints here? *)
+                      assert false
                 end
           end
     in
@@ -176,7 +180,11 @@ and substitute_poly_type (subst : substitution) (Poly(pty) : poly_type) : poly_t
   and aux_command_arg = function
     | CommandArgType(ptylabmap, pty) -> CommandArgType(ptylabmap |> LabelMap.map aux, aux pty)
   in
-  Poly(aux pty)
+
+  let substituted_cons = cons |> List.map (function
+    | ConstraintEqual(lhs, rhs) -> ConstraintEqual(aux lhs, aux rhs)
+  ) in
+  Poly(aux pty, substituted_cons)
 
 
 and substitute_type_id (subst : substitution) (tyid_from : TypeID.t) : TypeID.t =
@@ -200,11 +208,11 @@ and substitute_macro_type (subst : substitution) (pmacty : poly_macro_type) : po
 
 and substitute_macro_parameter_type (subst : substitution) = function
   | LateMacroParameter(pty) ->
-      let Poly(pty) = Poly(pty) |> substitute_poly_type subst in
+      let Poly(pty, _) = Poly(pty, []) |> substitute_poly_type subst in
       LateMacroParameter(pty)
 
   | EarlyMacroParameter(pty) ->
-      let Poly(pty) = Poly(pty) |> substitute_poly_type subst in
+      let Poly(pty, _) = Poly(pty, []) |> substitute_poly_type subst in
       EarlyMacroParameter(pty)
 
 
@@ -405,7 +413,7 @@ and subtype_concrete_with_abstract (rng : Range.t) (modsig1 : signature) (absmod
   return subst
 
 
-and subtype_poly_type_impl (internbid : type_intern) (internbrid : row_intern) (Poly(pty1) : poly_type) (Poly(pty2) : poly_type) : bool =
+and subtype_poly_type_impl (internbid : type_intern) (internbrid : row_intern) (pty1 : poly_type) (pty2 : poly_type) : bool =
   let rec aux (pty1 : poly_type_body) (pty2 : poly_type_body) =
     let (_, ptymain1) = pty1 in
     let (_, ptymain2) = pty2 in
@@ -415,7 +423,7 @@ and subtype_poly_type_impl (internbid : type_intern) (internbrid : row_intern) (
         false
 
     | (TypeVariable(PolyBound(bid1)), _) ->
-        internbid bid1 (Poly(pty2))
+        internbid bid1 (Poly(pty2, []))
 
     | (FuncType(poptrow1, ptydom1, ptycod1), FuncType(poptrow2, ptydom2, ptycod2)) ->
         subtype_row_with_equal_domain internbid internbrid poptrow1 poptrow2 &&
@@ -465,7 +473,10 @@ and subtype_poly_type_impl (internbid : type_intern) (internbrid : row_intern) (
         )
 
   in
-  aux pty1 pty2
+  (* TED: Poly types should not have constraints here. *)
+  match (pty1, pty2) with
+  | (Poly(pty1, []), Poly(pty2, [])) -> aux pty1 pty2
+  | _ -> assert false
 
 
 and subtype_row_with_equal_domain (internbid : type_intern) (internbrid : row_intern) (prow1 : poly_row) (prow2 : poly_row) : bool =
@@ -493,7 +504,7 @@ and subtype_row_with_equal_domain (internbid : type_intern) (internbrid : row_in
 and subtype_label_map_with_equal_domain (internbid : type_intern) (internbrid : row_intern) (pty_labmap1 : poly_type_body LabelMap.t) (pty_labmap2 : poly_type_body LabelMap.t) : bool =
   LabelMap.merge (fun _label pty1_opt pty2_opt ->
     match (pty1_opt, pty2_opt) with
-    | (Some(pty1), Some(pty2)) -> Some(subtype_poly_type_impl internbid internbrid (Poly(pty1)) (Poly(pty2)))
+    | (Some(pty1), Some(pty2)) -> Some(subtype_poly_type_impl internbid internbrid (Poly(pty1, [])) (Poly(pty2, [])))
     | _                        -> Some(false)
   ) pty_labmap1 pty_labmap2 |> LabelMap.for_all (fun _label b -> b)
 
@@ -505,7 +516,7 @@ and subtype_label_map_inclusive (internbid : type_intern) (internbrid : row_inte
   let merged =
     LabelMap.merge (fun _label pty1_opt pty2_opt ->
       match (pty1_opt, pty2_opt) with
-      | (Some(pty1), Some(pty2)) -> Some(Ok(subtype_poly_type_impl internbid internbrid (Poly(pty1)) (Poly(pty2))))
+      | (Some(pty1), Some(pty2)) -> Some(Ok(subtype_poly_type_impl internbid internbrid (Poly(pty1, [])) (Poly(pty2, []))))
       | (None, Some(pty2))       -> Some(Error(pty2))
       | _                        -> Some(Ok(false))
     ) pty_labmap1 pty_labmap2
@@ -544,7 +555,11 @@ and subtype_poly_type (pty1 : poly_type) (pty2 : poly_type) : bool =
     | Some(nomprow) ->
         TypeConv.normalized_poly_row_equal nomprow nomprow2
   in
-  subtype_poly_type_impl internbid internbrid pty1 pty2
+  (* TED: TODO: Is this level correct? *)
+  match TypeConv.apply_constraints_poly Level.bottom Quantifiable pty2 with
+  | Ok(pty2) -> subtype_poly_type_impl internbid internbrid pty1 pty2
+  | Error(_) -> false
+  (*TED: TODO: We should return more informative message. *)
 
 
 and subtype_type_scheme (tyscheme1 : type_scheme) (tyscheme2 : type_scheme) : bool =
@@ -560,7 +575,7 @@ and subtype_type_scheme (tyscheme1 : type_scheme) (tyscheme2 : type_scheme) : bo
           map |> BoundIDMap.add bid2 bid1
         ) BoundIDMap.empty
       in
-      let internbid (bid1 : BoundID.t) (Poly(pty2) : poly_type) : bool =
+      let internbid (bid1 : BoundID.t) (Poly(pty2, _) : poly_type) : bool =
         match pty2 with
         | (_, TypeVariable(PolyBound(bid2))) ->
             begin
@@ -607,10 +622,10 @@ and subtype_macro_type (macty1 : poly_macro_type) (macty2 : poly_macro_type) : b
     | zipped ->
         zipped |> List.for_all (function
         | (LateMacroParameter(pty1), LateMacroParameter(pty2)) ->
-            subtype_poly_type_impl internbid internbrid (Poly(pty1)) (Poly(pty2))
+            subtype_poly_type_impl internbid internbrid (Poly(pty1, [])) (Poly(pty2, []))
 
         | (EarlyMacroParameter(pty1), EarlyMacroParameter(pty2)) ->
-            subtype_poly_type_impl internbid internbrid (Poly(pty1)) (Poly(pty2))
+            subtype_poly_type_impl internbid internbrid (Poly(pty1, [])) (Poly(pty2, []))
 
         | _ ->
             false

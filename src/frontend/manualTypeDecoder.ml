@@ -226,3 +226,11 @@ let decode_manual_macro_type (pre : pre) (tyenv : Typeenv.t) (mmacty : manual_ma
   | MBlockMacroType(mmacparamtys) ->
       let* macparamtys = mmacparamtys |> mapM (decode_manual_macro_parameter_type pre tyenv) in
       return @@ BlockMacroType(macparamtys)
+
+let decode_manual_constraint (pre : pre) (tyenv : Typeenv.t) ((_, mcons) : manual_constraint) : mono_type_constraint ok =
+  let open ResultMonad in
+  match mcons with
+  | MConstraintEqual(lhs, rhs) ->
+      let* tyL = decode_manual_type pre tyenv lhs in
+      let* tyR = decode_manual_type pre tyenv rhs in
+      return @@ ConstraintEqual(tyL, tyR)

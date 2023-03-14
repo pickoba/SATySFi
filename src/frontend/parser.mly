@@ -235,7 +235,7 @@
 %}
 
 %token<Range.t>
-  AND AS BLOCK COMMAND ELSE END FALSE FUN
+  AND AS BLOCK COMMAND CONSTRAINT ELSE END FALSE FUN
   IF IN INCLUDE INLINE LET MOD MATCH MATH MODULE MUTABLE OF OPEN
   REC SIG SIGNATURE STRUCT THEN TRUE TYPE VAL WITH PERSISTENT PACKAGE USE
 
@@ -619,16 +619,16 @@ sigexpr_bot:
       }
 ;
 decl:
-  | VAL; ident=bound_identifier; mnquant=quant; COLON; mnty=typ
-      { UTDeclValue(Stage1, ident, mnquant, mnty) }
-  | VAL; EXACT_TILDE; ident=bound_identifier; mnquant=quant; COLON; mnty=typ
-      { UTDeclValue(Stage0, ident, mnquant, mnty) }
-  | VAL; PERSISTENT; EXACT_TILDE; ident=bound_identifier; mnquant=quant; COLON; mnty=typ
-      { UTDeclValue(Persistent0, ident, mnquant, mnty) }
-  | VAL; cs=BACKSLASH_CMD; mnquant=quant; COLON; mnty=typ
-      { UTDeclValue(Stage1, cs, mnquant, mnty) }
-  | VAL; cs=PLUS_CMD; mnquant=quant; COLON; mnty=typ
-      { UTDeclValue(Stage1, cs, mnquant, mnty) }
+  | VAL; ident=bound_identifier; mnquant=quant; COLON; mnty=typ; mnconstraints=list(typ_constraint)
+      { UTDeclValue(Stage1, ident, mnquant, mnty, mnconstraints) }
+  | VAL; EXACT_TILDE; ident=bound_identifier; mnquant=quant; COLON; mnty=typ; mnconstraints=list(typ_constraint)
+      { UTDeclValue(Stage0, ident, mnquant, mnty, mnconstraints) }
+  | VAL; PERSISTENT; EXACT_TILDE; ident=bound_identifier; mnquant=quant; COLON; mnty=typ; mnconstraints=list(typ_constraint)
+      { UTDeclValue(Persistent0, ident, mnquant, mnty, mnconstraints) }
+  | VAL; cs=BACKSLASH_CMD; mnquant=quant; COLON; mnty=typ; mnconstraints=list(typ_constraint)
+      { UTDeclValue(Stage1, cs, mnquant, mnty, mnconstraints) }
+  | VAL; cs=PLUS_CMD; mnquant=quant; COLON; mnty=typ; mnconstraints=list(typ_constraint)
+      { UTDeclValue(Stage1, cs, mnquant, mnty, mnconstraints) }
   | VAL; cs=BACKSLASH_MACRO; COLON; mnmacty=inline_macro_type
       { UTDeclMacro(cs, mnmacty) }
   | VAL; cs=PLUS_MACRO; COLON; mnmacty=block_macro_type
@@ -812,6 +812,10 @@ typ_macro_arg:
       { MLateMacroParameter(mnty) }
   | EXACT_TILDE; mnty=typ_bot
       { MEarlyMacroParameter(mnty) }
+typ_constraint:
+  | tok=CONSTRAINT; mntyL=typ; EXACT_EQ; mntyR=typ;
+      { let rng = make_range (Tok tok) (Ranged mntyR) in (rng, MConstraintEqual(mntyL, mntyR)) }
+;
 expr:
   | tokL=MATCH; utast=expr; WITH; BAR?; branches=separated_nonempty_list(BAR, branch); tokR=END
       { make_standard (Tok tokL) (Tok tokR) (UTPatternMatch(utast, branches)) }

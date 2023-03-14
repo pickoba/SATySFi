@@ -76,7 +76,8 @@ let make_constructor_branch_map (pre : pre) (tyenv : Typeenv.t) (utctorbrs : con
           | Some(mty) -> ManualTypeDecoder.decode_manual_type pre tyenv mty
           | None      -> return (Range.dummy "unit", BaseType(UnitType))
         in
-        let pty = TypeConv.generalize pre.level ty in
+        (* TED: Variants cannot have constraints. *)
+        let pty = TypeConv.generalize pre.level ty [] in
         return (ctormap |> ConstructorMap.add ctornm pty)
   ) ConstructorMap.empty
 
@@ -85,7 +86,8 @@ let add_dummy_fold (tynm : type_name) (tyid : TypeID.t) (bids : BoundID.t list) 
   let bid = BoundID.fresh () in
   let dr = Range.dummy "add_dummy_fold" in
   let prow =
-    ConstructorMap.fold (fun ctornm (Poly(ptyarg)) prow ->
+    (* TED: Variants cannot have constraints. *)
+    ConstructorMap.fold (fun ctornm (Poly(ptyarg, _)) prow ->
       let pty = (dr, FuncType(RowEmpty, ptyarg, (dr, TypeVariable(PolyBound(bid))))) in
       RowCons((dr, ctornm), pty, prow)
     ) ctorbrmap RowEmpty
@@ -94,7 +96,7 @@ let add_dummy_fold (tynm : type_name) (tyid : TypeID.t) (bids : BoundID.t list) 
   let ptydom2 = (dr, DataType(bids |> List.map (fun bid -> (dr, TypeVariable(PolyBound(bid)))), tyid)) in
   let ptycod = (dr, TypeVariable(PolyBound(bid))) in
   let pty = (dr, FuncType(RowEmpty, ptydom1, (dr, FuncType(RowEmpty, ptydom2, ptycod)))) in
-  ssig |> StructSig.add_dummy_fold tynm (Poly(pty))
+  ssig |> StructSig.add_dummy_fold tynm (Poly(pty, []))
 
 
 let add_constructor_definitions (ctordefs : variant_definition list) (ssig : StructSig.t) : StructSig.t =
@@ -165,10 +167,10 @@ let add_macro_parameters_to_type_environment (tyenv : Typeenv.t) (pre : pre) (ma
       let (pty, macparamty) =
       match macparam with
       | UTLateMacroParam(_) ->
-          (Poly(Range.dummy "late-macro-param", CodeType(ptybody)), LateMacroParameter(beta))
+          (Poly((Range.dummy "late-macro-param", CodeType(ptybody)), []), LateMacroParameter(beta))
 
       | UTEarlyMacroParam(_) ->
-          (Poly(ptybody), EarlyMacroParameter(beta))
+          (Poly(ptybody, []), EarlyMacroParameter(beta))
       in
       let ventry =
         {
@@ -322,7 +324,8 @@ let bind_types (tyenv : Typeenv.t) (tybinds : untyped_type_binding list) : ((typ
       let* (typarammap, bids) = pre.type_parameters |> add_type_parameters (Level.succ pre.level) tyvars in
       let pre = { pre with type_parameters = typarammap } in
       let* ty_body = ManualTypeDecoder.decode_manual_type pre tyenv mty_body in
-      let pty_body = TypeConv.generalize Level.bottom ty_body in
+      (* TED: Since type binding does not support constraint clauses, we pass [] for constraints. *)
+      let pty_body = TypeConv.generalize Level.bottom ty_body [] in
       let tentry =
         {
           type_scheme = (bids, pty_body);
@@ -541,7 +544,7 @@ and typecheck_declaration_list (tyenv : Typeenv.t) (utdecls : untyped_declaratio
 and typecheck_declaration (tyenv : Typeenv.t) (utdecl : untyped_declaration) : (StructSig.t abstracted) ok =
   let open ResultMonad in
   match utdecl with
-  | UTDeclValue(stage, (_, x), (typarams, rowparams), mty) ->
+  | UTDeclValue(stage, (_, x), (typarams, rowparams), mty, mcons) ->
       let* (typarammap, _) = TypeParameterMap.empty |> add_type_parameters (Level.succ Level.bottom) typarams in
       let* (rowparammap, _) = RowParameterMap.empty |> add_row_parameters (Level.succ Level.bottom) rowparams in
       let pre =
@@ -554,7 +557,18 @@ and typecheck_declaration (tyenv : Typeenv.t) (utdecl : untyped_declaration) : (
         }
       in
       let* ty = ManualTypeDecoder.decode_manual_type pre tyenv mty in
-      let pty = TypeConv.generalize Level.bottom ty in
+      let* cons = mcons |> mapM (ManualTypeDecoder.decode_manual_constraint pre tyenv) in
+      let pty = TypeConv.generalize Level.bottom ty cons in
+      (* TED: JUST FOR DEBUG: START *)
+      let _ = match cons with
+      | [] -> ()
+      | _ ->
+          Printf.printf " ----\n";
+          Printf.printf "%d constraint(s) found for '%s'\n" (List.length cons) x;
+          Printf.printf "%s\n" (Display.show_poly_type pty);
+          Printf.printf " ----\n"
+      in
+      (* TED: JUST FOR DEBUG: END *)
       let ventry =
         {
           val_type  = pty;
@@ -746,7 +760,8 @@ and typecheck_nonrec (pre : pre) (tyenv : Typeenv.t) (ident : var_name ranged) (
   let should_be_polymorphic = true in
     let pty =
       if should_be_polymorphic then
-        TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1)
+        (* TED: Implementation does not generete constraints. *)
+        TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1) []
       else
         TypeConv.lift_poly (TypeConv.erase_range_of_type ty1)
     in

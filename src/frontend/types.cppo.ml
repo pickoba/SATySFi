@@ -108,6 +108,13 @@ type manual_kind =
   | MKind of manual_base_kind list * manual_base_kind
 [@@deriving show]
 
+type manual_constraint =
+  manual_constraint_main ranged
+
+and manual_constraint_main =
+  | MConstraintEqual of manual_type * manual_type
+[@@deriving show]
+
 type base_type =
   | UnitType
   | BoolType
@@ -226,6 +233,9 @@ and ('a, 'b) row =
   | RowVar   of 'b
   | RowEmpty
 
+and 'a type_constraint =
+  | ConstraintEqual of 'a * 'a
+
 and mono_row_variable_updatable =
   | MonoRowFree of FreeRowID.t
   | MonoRowLink of mono_row
@@ -250,6 +260,12 @@ and poly_type_variable =
   | PolyFree  of mono_type_variable_updatable ref
   | PolyBound of BoundID.t
 
+and mono_type_constraint =
+  mono_type type_constraint
+
+and poly_type_constraint =
+  poly_type_body type_constraint
+
 and mono_type =
   (mono_type_variable, mono_row_variable) typ
 
@@ -257,7 +273,7 @@ and poly_type_body =
   (poly_type_variable, poly_row_variable) typ
 
 and poly_type =
-  | Poly of poly_type_body
+  | Poly of poly_type_body * poly_type_constraint list
 
 and mono_row =
   (mono_type_variable, mono_row_variable) row
@@ -393,7 +409,7 @@ and untyped_declaration =
     (* TODO; should be `untyped_declaration_main ranged`  *)
 
 and untyped_declaration_main =
-  | UTDeclValue      of stage * var_name ranged * manual_quantifier * manual_type
+  | UTDeclValue      of stage * var_name ranged * manual_quantifier * manual_type * manual_constraint list
   | UTDeclTypeOpaque of type_name ranged * manual_kind
   | UTDeclModule     of module_name ranged * untyped_signature
   | UTDeclSignature  of signature_name ranged * untyped_signature

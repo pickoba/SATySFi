@@ -11,3 +11,6 @@ val decode_manual_type : pre -> type_environment -> manual_type -> mono_type ok
 
 (** Convert manually written macro types into internal ones. *)
 val decode_manual_macro_type : pre -> type_environment -> manual_macro_type -> mono_macro_type ok
+
+(** Convert manually written constraints into internal ones. *)
+val decode_manual_constraint : pre -> type_environment -> manual_constraint -> mono_type_constraint ok

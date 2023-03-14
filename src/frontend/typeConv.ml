@@ -148,15 +148,22 @@ let make_row_instantiation_intern (lev : level) (brid_ht : mono_row_variable Bou
   intern_row
 
 
-let instantiate (lev : level) (qtfbl : quantifiability) ((Poly(pty)) : poly_type) : mono_type =
+let instantiate (lev : level) (qtfbl : quantifiability) ((Poly(pty, cons)) : poly_type) : mono_type * mono_type_constraint list =
   let bid_ht = BoundIDHashTable.create 32 in
   let brid_ht = BoundRowIDHashTable.create 32 in
   let intern_ty = make_type_instantiation_intern lev qtfbl bid_ht in
   let intern_row = make_row_instantiation_intern lev brid_ht in
-  instantiate_impl intern_ty intern_row pty
+  let mty = instantiate_impl intern_ty intern_row pty in
+  let mcons = cons |> List.map (function
+    | ConstraintEqual(lhs, rhs) ->
+        let mty1 = instantiate_impl intern_ty intern_row lhs in
+        let mty2 = instantiate_impl intern_ty intern_row rhs in
+        ConstraintEqual(mty1, mty2)
+  ) in
+  (mty, mcons)
 
 
-let instantiate_by_map_mono (bidmap : mono_type BoundIDMap.t) (Poly(pty) : poly_type) : mono_type =
+let instantiate_by_map_mono (bidmap : mono_type BoundIDMap.t) (Poly(pty, _) : poly_type) : mono_type =
   let intern_ty (rng : Range.t) (ptv : poly_type_variable) =
     match ptv with
     | PolyFree(tvuref) ->
@@ -177,7 +184,7 @@ let instantiate_by_map_mono (bidmap : mono_type BoundIDMap.t) (Poly(pty) : poly_
   instantiate_impl intern_ty intern_row pty
 
 
-let instantiate_by_map_poly (bidmap : poly_type_body BoundIDMap.t) (Poly(pty) : poly_type) : poly_type =
+let instantiate_by_map_poly (bidmap : poly_type_body BoundIDMap.t) (Poly(pty, _) : poly_type) : poly_type =
   let intern_ty (rng : Range.t) (ptv : poly_type_variable) : poly_type_body =
     match ptv with
     | PolyFree(_) ->
@@ -193,7 +200,7 @@ let instantiate_by_map_poly (bidmap : poly_type_body BoundIDMap.t) (Poly(pty) : 
   let intern_row prv =
     RowVar(prv)
   in
-  Poly(instantiate_impl intern_ty intern_row pty)
+  Poly(instantiate_impl intern_ty intern_row pty, [])
 
 
 let instantiate_macro_type (lev : level) (qtfbl : quantifiability) (pmacty : poly_macro_type) : mono_macro_type =
@@ -314,12 +321,19 @@ let make_row_generalization_intern (lev : level) (rvid_ht : BoundRowID.t FreeRow
   intern_row
 
 
-let generalize (lev : level) (ty : mono_type) : poly_type =
+let generalize (lev : level) (ty : mono_type) (cons : mono_type_constraint list): poly_type =
   let tvid_ht = FreeIDHashTable.create 32 in
   let rvid_ht = FreeRowIDHashTable.create 32 in
   let intern_ty = make_type_generalization_intern lev tvid_ht in
   let intern_row = make_row_generalization_intern lev rvid_ht in
-  Poly(lift_poly_general intern_ty intern_row ty)
+  let gen_ty = lift_poly_general intern_ty intern_row ty in
+  let gen_cons = cons |> List.map (function
+    | ConstraintEqual(lhs, rhs) ->
+        let gen_lhs = lift_poly_general intern_ty intern_row lhs in
+        let gen_rhs = lift_poly_general intern_ty intern_row rhs in
+        ConstraintEqual(gen_lhs, gen_rhs)
+  ) in
+  Poly(gen_ty, gen_cons)
 
 
 let lift_poly_body =
@@ -327,7 +341,7 @@ let lift_poly_body =
 
 
 let lift_poly (ty : mono_type) : poly_type =
-  Poly(lift_poly_body ty)
+  Poly(lift_poly_body ty, [])
 
 
 let generalize_macro_type (macty : mono_macro_type) : poly_macro_type =
@@ -399,11 +413,11 @@ let make_opaque_type_scheme (arity : int) (tyid : TypeID.t) : type_scheme =
   let rng = Range.dummy "add_variant_types" in
   let bids = List.init arity (fun _ -> BoundID.fresh ()) in
   let ptys = bids |> List.map (fun bid -> (rng, TypeVariable(PolyBound(bid)))) in
-  (bids, Poly((rng, DataType(ptys, tyid))))
+  (bids, Poly((rng, DataType(ptys, tyid)), []))
 
 
 let get_opaque_type (tyscheme : type_scheme) : TypeID.t option =
-  let (bids, Poly(pty_body)) = tyscheme in
+  let (bids, Poly(pty_body, _)) = tyscheme in
   match pty_body with
   | (_, DataType(ptys, tyid)) ->
       begin
@@ -436,7 +450,8 @@ let kind_equal (kd1 : kind) (kd2 : kind) : bool =
   | zipped                        -> zipped |> List.for_all (fun (TypeKind, TypeKind) -> true)
 
 
-let rec poly_type_equal (Poly(pty1) : poly_type) (Poly(pty2) : poly_type) : bool =
+(* TED: TODO: constraints should be checked (might be better to use [apply_constraints_poly]) *)
+let rec poly_type_equal (Poly(pty1, _) : poly_type) (Poly(pty2, _) : poly_type) : bool =
   let rec aux (pty1 : poly_type_body) (pty2 : poly_type_body) =
     let (_, ptymain1) = pty1 in
     let (_, ptymain2) = pty2 in
@@ -527,7 +542,7 @@ and normalized_poly_row_equal (nomrow1 : normalized_poly_row) (nomrow2 : normali
     LabelMap.merge (fun _ ptyopt1 ptyopt2 ->
       match (ptyopt1, ptyopt2) with
       | (None, None)             -> None
-      | (Some(pty1), Some(pty2)) -> Some(poly_type_equal (Poly(pty1)) (Poly(pty2)))
+      | (Some(pty1), Some(pty2)) -> Some(poly_type_equal (Poly(pty1, [])) (Poly(pty2, [])))
       | _                        -> Some(false)
     ) plabmap1 plabmap2 |> LabelMap.for_all (fun _label b -> b)
   in
@@ -537,3 +552,12 @@ and normalized_poly_row_equal (nomrow1 : normalized_poly_row) (nomrow2 : normali
     | (Some(PolyRowBound(brid1)), Some(PolyRowBound(brid2))) -> BoundRowID.equal brid1 brid2
     | _                                                      -> false
   end
+
+let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (pty : poly_type) : (poly_type, TypeError.unification_error) result =
+  let open ResultMonad in
+  let (mty, cons) = instantiate (Level.succ lev) qtfbl pty in
+  let* _ = cons |> mapM (function
+    | ConstraintEqual(lhs, rhs) -> Unification.unify_type lhs rhs
+  ) in
+  let pty = generalize lev mty [] in
+  return pty

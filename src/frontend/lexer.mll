@@ -317,6 +317,7 @@ rule lex_program stack = parse
         | "as"        -> AS(pos)
         | "block"     -> BLOCK(pos)
         | "command"   -> COMMAND(pos)
+        | "constraint"-> CONSTRAINT(pos)
         | "else"      -> ELSE(pos)
         | "end"       -> END(pos)
         | "false"     -> FALSE(pos)

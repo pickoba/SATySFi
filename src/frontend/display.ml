@@ -192,7 +192,8 @@ let collect_ids_mono_row (row : mono_row) (dispmap : DisplayMap.t) : DisplayMap.
   dispmap |> collect_from_hash_tables fid_ht frid_ht bid_ht brid_ht
 
 
-let collect_ids_poly (Poly(pty) : poly_type) (dispmap : DisplayMap.t) : DisplayMap.t =
+(* TED: Is it reasonable to discard the constraints? *)
+let collect_ids_poly (Poly(pty, _) : poly_type) (dispmap : DisplayMap.t) : DisplayMap.t =
   let fid_ht = DisplayMap.make_free_id_hash_set dispmap in
   let frid_ht = DisplayMap.make_free_row_id_hash_set dispmap in
   let bid_ht = DisplayMap.make_bound_id_hash_set dispmap in
@@ -442,19 +443,36 @@ let show_mono_type_double (ty1 : mono_type) (ty2 : mono_type) =
   let s2 = show_type show_row tvf Outmost ty2 in
   (s1, s2)
 
+let show_mono_type_constraint (cons : mono_type_constraint) =
+  match cons with
+  | ConstraintEqual(lhs, rhs) ->
+      let sl = show_mono_type lhs in
+      let sr = show_mono_type rhs in
+      Printf.sprintf "constraint %s = %s" sl sr
 
-let show_poly_type (Poly(pty) : poly_type) =
-  let dispmap = DisplayMap.empty |> collect_ids_poly (Poly(pty)) in
+let rec show_poly_type (Poly(pty, cons) : poly_type) =
+  let dispmap = DisplayMap.empty |> collect_ids_poly (Poly(pty, [])) in
+  let sty = show_poly_type_body dispmap pty in
+  let scons = cons |> List.map (show_poly_type_constraint dispmap) |> String.concat " " in
+  Printf.sprintf "%s %s" sty scons
+
+and show_poly_type_body (dispmap : DisplayMap.t) (pty : poly_type_body) =
   show_type (show_poly_row_by_map dispmap) (tvf_poly dispmap) Outmost pty
 
+and show_poly_type_constraint (dispmap : DisplayMap.t) (con : poly_type_constraint) =
+  match con with
+  | ConstraintEqual(lhs, rhs) ->
+      let sl = show_poly_type_body dispmap lhs in
+      let sr = show_poly_type_body dispmap rhs in
+      Printf.sprintf "constraint %s = %s" sl sr
 
 let show_poly_macro_parameter_type (macparamty : poly_macro_parameter_type) =
   match macparamty with
   | LateMacroParameter(pty) ->
-      show_poly_type (Poly(pty))
+      show_poly_type (Poly(pty, []))
 
   | EarlyMacroParameter(pty) ->
-      let s = show_poly_type (Poly(pty)) in
+      let s = show_poly_type (Poly(pty, [])) in
       Printf.sprintf "~(%s)" s
 
 

@@ -133,7 +133,8 @@ let check_font_package (_main_module_name : module_name) (font_files : font_file
           let ventry =
             {
               val_name  = Some(evid);
-              val_type  = Poly(Range.dummy "font-package 2", BaseType(FontType));
+              (* TED: Font type does not generate constraints. *)
+              val_type  = Poly((Range.dummy "font-package 2", BaseType(FontType)), []);
               val_stage = stage;
             }
           in
@@ -147,7 +148,8 @@ let check_font_package (_main_module_name : module_name) (font_files : font_file
               let ventry =
                 {
                   val_name  = Some(evid);
-                  val_type  = Poly(Range.dummy "font-package 4", BaseType(FontType));
+                  (* TED: Font type does not generate constraints. *)
+                  val_type  = Poly((Range.dummy "font-package 4", BaseType(FontType)), []);
                   val_stage = stage;
                 }
               in
