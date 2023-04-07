@@ -1567,14 +1567,14 @@ let check_depended_packages ~(use_test_only_lock : bool) ~(library_root : abs_pa
   in
 
   (* Typecheck every locked package: *)
-  let (genv, configenv, libacc) =
-    sorted_packages |> List.fold_left (fun (genv, configenv, libacc) (_lock_name, (config, package)) ->
+  let (genv, configenv, libacc, consacc) =
+    sorted_packages |> List.fold_left (fun (genv, configenv, libacc, consacc) (_lock_name, (config, package)) ->
       let main_module_name =
         match package with
         | UTLibraryPackage{ main_module_name; _ } -> main_module_name
         | UTFontPackage{ main_module_name; _ }    -> main_module_name
       in
-      let (ssig, libs) =
+      let (ssig, libs, cons) =
         match PackageChecker.main tyenv_prim genv package with
         | Ok(pair) -> pair
         | Error(e) -> raise (ConfigError(e))
@@ -1582,10 +1582,10 @@ let check_depended_packages ~(use_test_only_lock : bool) ~(library_root : abs_pa
       let genv = genv |> GlobalTypeenv.add main_module_name ssig in
       let configenv = configenv |> GlobalTypeenv.add main_module_name config in
       let libacc = Alist.append libacc libs in
-      (genv, configenv, libacc)
-    ) (GlobalTypeenv.empty, GlobalTypeenv.empty, Alist.empty)
+      (genv, configenv, libacc, consacc @ cons)
+    ) (GlobalTypeenv.empty, GlobalTypeenv.empty, Alist.empty, [])
   in
-  (genv, configenv, Alist.to_list libacc)
+  (genv, configenv, Alist.to_list libacc, consacc)
 
 
 let make_package_lock_config_path (abspathstr_in : string) =
@@ -1704,14 +1704,14 @@ let build
 
         let (_config, package) = load_package ~use_test_files:false ~extensions abspath_in in
 
-        let (genv, _configenv, _libs_dep) =
+        let (genv, _configenv, _libs_dep, _cons) =
           check_depended_packages ~use_test_only_lock:false ~library_root ~extensions tyenv_prim lock_config
         in
 
         begin
           match PackageChecker.main tyenv_prim genv package with
-          | Ok((_ssig, _libs)) -> ()
-          | Error(e)           -> raise (ConfigError(e))
+          | Ok((_ssig, _libs, _cons)) -> ()
+          | Error(e)                  -> raise (ConfigError(e))
         end
 
     | DocumentBuildInput{
@@ -1728,7 +1728,7 @@ let build
         let dump_file_exists = CrossRef.initialize abspath_dump in
         Logging.dump_file ~already_exists:dump_file_exists abspath_dump;
 
-        let (genv, configenv, libs) =
+        let (genv, configenv, libs, consenv) =
           check_depended_packages ~use_test_only_lock:false ~library_root ~extensions tyenv_prim lock_config
         in
 
@@ -1740,12 +1740,31 @@ let build
         in
 
         (* Typechecking and elaboration: *)
-        let (libs_local, ast_doc) =
+        let (libs_local, ast_doc, cons_doc) =
           match PackageChecker.main_document tyenv_prim genv sorted_locals (abspath_in, utdoc) with
           | Ok(pair) -> pair
           | Error(e) -> raise (ConfigError(e))
         in
         let libs = List.append libs libs_local in
+        let cons = consenv @ cons_doc in
+        (* TED: JUST FOR DEBUG START *)
+        let () =
+          Printf.printf " ---- ---- (main) ---- ----\n";
+          Printf.printf "%d constraint(s) found\n" (List.length cons);
+          cons |> List.iter (fun con -> Printf.printf "%s\n" (Display.show_mono_type_constraint con));
+          Printf.printf " ---- ---- ------ ---- ----\n"
+        in
+        (* TED: JUST FOR DEBUG END *)
+        (* TED: solve constraints START *)
+        Printf.printf " -- (constraint solving) --\n";
+        let _ = cons |> List.iter (fun con ->
+          Printf.printf "trying to apply %s\n" (Display.show_mono_type_constraint con);
+          match TypeConv.solve_constraint con with
+          | Ok(()) -> ()
+          | Error(e) -> raise (ConfigError(TypeError(e)))
+        ) in
+        Printf.printf " --------------------------\n";
+        (* TED: solve constraints END *)
         if type_check_only then
           ()
         else
@@ -1826,14 +1845,14 @@ let test
 
           let (_config, package) = load_package ~use_test_files:true ~extensions abspath_in in
 
-          let (genv, _configenv, _libs_dep) =
+          let (genv, _configenv, _libs_dep, _cons) =
             check_depended_packages ~use_test_only_lock:true ~library_root ~extensions tyenv_prim lock_config
           in
 
           let libs =
             match PackageChecker.main tyenv_prim genv package with
-            | Ok((_ssig, libs)) -> libs
-            | Error(e)          -> raise (ConfigError(e))
+            | Ok((_ssig, libs, _cons)) -> libs
+            | Error(e)                 -> raise (ConfigError(e))
           in
           let (env, codebinds) = preprocess_bindings ~run_tests:true env libs in
           let _env = evaluate_bindings ~run_tests:true env codebinds in
@@ -1846,7 +1865,7 @@ let test
           Logging.lock_config_file abspath_lock_config;
           let lock_config = load_lock_config abspath_lock_config in
 
-          let (genv, configenv, libs) =
+          let (genv, configenv, libs, _cons) =
             check_depended_packages ~use_test_only_lock:true ~library_root ~extensions tyenv_prim lock_config
           in
 
@@ -1858,7 +1877,7 @@ let test
           in
 
           (* Typechecking and elaboration: *)
-          let (libs_local, _ast_doc) =
+          let (libs_local, _ast_doc, _cons) =
             match PackageChecker.main_document tyenv_prim genv sorted_locals (abspath_in, utdoc) with
             | Ok(pair) -> pair
             | Error(e) -> raise (ConfigError(e))

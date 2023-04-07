@@ -38,4 +38,6 @@ val normalize_mono_row : mono_row -> normalized_mono_row
 
 val normalized_poly_row_equal : normalized_poly_row -> normalized_poly_row -> bool
 
-val apply_constraints_poly : level -> quantifiability -> poly_type -> (poly_type, TypeError.unification_error) result
+val solve_constraint : mono_type_constraint -> (unit, TypeError.type_error) result
+
+val apply_constraints_poly : level -> quantifiability -> poly_type -> (poly_type, TypeError.type_error) result

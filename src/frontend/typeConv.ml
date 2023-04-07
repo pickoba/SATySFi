@@ -553,11 +553,18 @@ and normalized_poly_row_equal (nomrow1 : normalized_poly_row) (nomrow2 : normali
     | _                                                      -> false
   end
 
-let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (pty : poly_type) : (poly_type, TypeError.unification_error) result =
+let solve_constraint (con : mono_type_constraint) : (unit, TypeError.type_error) result =
+  match con with
+  | ConstraintEqual(lhs, rhs) ->
+      Unification.unify_type lhs rhs
+      |> Result.map_error (fun uerr -> TypeError.TypeUnificationError(lhs, rhs, uerr))
+
+let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (pty : poly_type) : (poly_type, TypeError.type_error) result =
   let open ResultMonad in
-  let (mty, cons) = instantiate (Level.succ lev) qtfbl pty in
-  let* _ = cons |> mapM (function
-    | ConstraintEqual(lhs, rhs) -> Unification.unify_type lhs rhs
-  ) in
-  let pty = generalize lev mty [] in
-  return pty
+  match pty with
+  | Poly(_, []) -> return pty
+  | _ ->
+      let (mty, cons) = instantiate (Level.succ lev) qtfbl pty in
+      let* _ = cons |> mapM solve_constraint in
+      let pty = generalize lev mty [] in
+      return pty

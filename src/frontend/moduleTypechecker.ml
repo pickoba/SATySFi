@@ -646,24 +646,25 @@ and typecheck_declaration (tyenv : Typeenv.t) (utdecl : untyped_declaration) : (
       return (OpaqueIDMap.empty, ssig)
 
 
-let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signature abstracted * binding list) ok =
+let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signature abstracted * binding list * mono_type_constraint list) ok =
   let open ResultMonad in
   let (rng, utmodmain) = utmod in
   match utmodmain with
   | UTModVar(modchain) ->
       let* mentry = find_module_chain tyenv modchain in
       let modsig = mentry.mod_signature in
-      return ((OpaqueIDMap.empty, modsig), [])
+      (* TED: TODO: Is this correct? *)
+      return ((OpaqueIDMap.empty, modsig), [], [])
 
   | UTModBinds(utbinds) ->
-      let* ((quant, ssig), binds) = typecheck_binding_list tyenv utbinds in
-      return ((quant, ConcStructure(ssig)), binds)
+      let* ((quant, ssig), binds, cons) = typecheck_binding_list tyenv utbinds in
+      return ((quant, ConcStructure(ssig)), binds, cons)
 
   | UTModFunctor(modident1, utsig1, utmod2) ->
       let (_, modnm1) = modident1 in
       let* absmodsig1 = typecheck_signature tyenv utsig1 in
       let (quant1, modsig1) = absmodsig1 in
-      let* (absmodsig2, _binds2) =
+      let* (absmodsig2, _binds2, cons2) =
         let mentry1 = { mod_signature = modsig1; } in
         let tyenv = tyenv |> Typeenv.add_module modnm1 mentry1 in
         typecheck_module tyenv utmod2
@@ -677,7 +678,7 @@ let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signatu
         }
       in
       let absmodsig = (OpaqueIDMap.empty, ConcFunctor(fsig)) in
-      return (absmodsig, [])
+      return (absmodsig, [], cons2)
 
   | UTModApply(modchain1, modchain2) ->
       let* mentry1 = find_module_chain tyenv modchain1 in
@@ -701,7 +702,7 @@ let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signatu
                   let* subst =
                     SignatureSubtyping.subtype_concrete_with_abstract rng modsig2 (quant1, modsig_dom1)
                   in
-                  let* ((_, modsig0), binds) =
+                  let* ((_, modsig0), binds, cons) =
                     let mentry0 = { mod_signature = modsig2; } in
                     typecheck_module (tyenv0 |> Typeenv.add_module modnm0 mentry0) utmod0
                   in
@@ -709,7 +710,7 @@ let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signatu
                     absmodsig_cod1 |> SignatureSubtyping.substitute_abstract subst
                   in
                   let absmodsig = (quant1_subst, copy_contents modsig0 modsig_cod1_subst) in
-                  return (absmodsig, binds)
+                  return (absmodsig, binds, cons)
 
               | _ ->
                   assert false
@@ -721,33 +722,34 @@ let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signatu
       let modsig1 = mentry1.mod_signature in
       let* absmodsig2 = typecheck_signature tyenv utsig2 in
       let* absmodsig = coerce_signature rng modsig1 absmodsig2 in
-      return (absmodsig, [])
+      (* TED: TODO: Is this correct? *)
+      return (absmodsig, [], [])
 
 
-and typecheck_binding_list (tyenv : Typeenv.t) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list) ok =
+and typecheck_binding_list (tyenv : Typeenv.t) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list * mono_type_constraint list) ok =
   let open ResultMonad in
-  let* (binds, (quant, ssig)) =
-    let* (bindacc, _tyenv, quantacc, ssigacc) =
-      utbinds |> foldM (fun (bindacc, tyenv, quantacc, ssigacc) utbind ->
-        let* (binds, (quant, ssig)) = typecheck_binding tyenv utbind in
+  let* (binds, (quant, ssig), consacc) =
+    let* (bindacc, _tyenv, quantacc, ssigacc, consacc) =
+      utbinds |> foldM (fun (bindacc, tyenv, quantacc, ssigacc, consacc) utbind ->
+        let* (binds, (quant, ssig), cons) = typecheck_binding tyenv utbind in
         let tyenv = tyenv |> add_to_type_environment_by_signature ssig in
         let bindacc = Alist.append bindacc binds in
         let quantacc = unify_quantifier quantacc quant in
         match StructSig.union ssigacc ssig with
-        | Ok(ssigacc) -> return (bindacc, tyenv, quantacc, ssigacc)
+        | Ok(ssigacc) -> return (bindacc, tyenv, quantacc, ssigacc, consacc @ cons)
         | Error(s)    -> let (rng, _) = utbind in err (ConflictInSignature(rng, s))
-      ) (Alist.empty, tyenv, OpaqueIDMap.empty, StructSig.empty)
+      ) (Alist.empty, tyenv, OpaqueIDMap.empty, StructSig.empty, [])
     in
-    return (Alist.to_list bindacc, (quantacc, ssigacc))
+    return (Alist.to_list bindacc, (quantacc, ssigacc), consacc)
   in
-  return ((quant, ssig), binds)
+  return ((quant, ssig), binds, consacc)
 
 
 and typecheck_nonrec (pre : pre) (tyenv : Typeenv.t) (ident : var_name ranged) (utast1 : untyped_abstract_tree) (ty_expected_opt : mono_type option) =
   let open ResultMonad in
   let presub = { pre with level = Level.succ pre.level; } in
   let evid = EvalVarID.fresh ident in
-  let* (e1_raw, ty1) = Typechecker.typecheck presub tyenv utast1 in
+  let* (e1_raw, ty1, cons1) = Typechecker.typecheck presub tyenv utast1 in
   let e1 = e1_raw in
   let* () =
     match ty_expected_opt with
@@ -765,10 +767,10 @@ and typecheck_nonrec (pre : pre) (tyenv : Typeenv.t) (ident : var_name ranged) (
       else
         TypeConv.lift_poly (TypeConv.erase_range_of_type ty1)
     in
-  return (evid, e1, pty)
+  return (evid, e1, pty, cons1)
 
 
-and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding list * StructSig.t abstracted) ok =
+and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding list * StructSig.t abstracted * mono_type_constraint list) ok =
   let open ResultMonad in
   let (_, utbindmain) = utbind in
   match utbindmain with
@@ -791,17 +793,17 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
         | (Stage1, UTNonRec(ident, utast1)) ->
             let (_, test_name) = ident in
             let ty_expected = (Range.dummy "test", BaseType(UnitType)) in
-            let* (evid, e1, _pty) = typecheck_nonrec pre tyenv ident utast1 (Some(ty_expected)) in
-            return ([ BindTest(evid, test_name, e1) ], (OpaqueIDMap.empty, StructSig.empty))
+            let* (evid, e1, _pty, cons) = typecheck_nonrec pre tyenv ident utast1 (Some(ty_expected)) in
+            return ([ BindTest(evid, test_name, e1) ], (OpaqueIDMap.empty, StructSig.empty), cons)
 
         | _ ->
             let rng = Range.dummy "TODO (error): typecheck_binding, test" in
             err @@ TestMustBeStage1NonRec(rng)
       else
-        let* (rec_or_nonrecs, ssig) =
+        let* (rec_or_nonrecs, ssig, cons) =
           match valbind with
           | UTNonRec(ident, utast1) ->
-              let* (evid, e1, pty) = typecheck_nonrec pre tyenv ident utast1 None in
+              let* (evid, e1, pty, cons) = typecheck_nonrec pre tyenv ident utast1 None in
               let ssig =
                 let (_, varnm) = ident in
                 let ventry =
@@ -813,13 +815,13 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
                 in
                 StructSig.empty |> StructSig.add_value varnm ventry
               in
-              return ([ NonRec(evid, e1) ], ssig)
+              return ([ NonRec(evid, e1) ], ssig, cons)
 
           | UTRec(utrecbinds) ->
               let* quints = Typechecker.typecheck_letrec pre tyenv utrecbinds in
-              let (recbindacc, ssig) =
-                quints |> List.fold_left (fun (recbindacc, ssig) quint ->
-                  let (x, pty, evid, recbind) = quint in
+              let (recbindacc, consacc, ssig) =
+                quints |> List.fold_left (fun (recbindacc, consacc, ssig) quint ->
+                  let (x, pty, evid, recbind, cons) = quint in
                   let ssig =
                     let ventry =
                       {
@@ -831,13 +833,13 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
                     ssig |> StructSig.add_value x ventry
                   in
                   let recbindacc = Alist.extend recbindacc recbind in
-                  (recbindacc, ssig)
-                ) (Alist.empty, StructSig.empty)
+                  (recbindacc, consacc @ cons, ssig)
+                ) (Alist.empty, [], StructSig.empty)
               in
-              return ([ Rec(recbindacc |> Alist.to_list) ], ssig)
+              return ([ Rec(recbindacc |> Alist.to_list) ], ssig, consacc)
 
           | UTMutable((rng, varnm) as var, utastI) ->
-              let* (eI, tyI) = Typechecker.typecheck { pre with quantifiability = Unquantifiable; } tyenv utastI in
+              let* (eI, tyI, cI) = Typechecker.typecheck { pre with quantifiability = Unquantifiable; } tyenv utastI in
               let evid = EvalVarID.fresh var in
               let pty = TypeConv.lift_poly (rng, RefType(tyI)) in
               let ssig =
@@ -850,10 +852,10 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
                 in
                 StructSig.empty |> StructSig.add_value varnm ventry
               in
-              return ([ Mutable(evid, eI) ], ssig)
+              return ([ Mutable(evid, eI) ], ssig, cI)
         in
         let binds = rec_or_nonrecs |> List.map (fun rec_or_nonrec -> Bind(stage, rec_or_nonrec)) in
-        return (binds, (OpaqueIDMap.empty, ssig))
+        return (binds, (OpaqueIDMap.empty, ssig), cons)
 
   | UTBindType([]) ->
       assert false
@@ -866,11 +868,11 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
         ) StructSig.empty
       in
       let ssig = ssig |> add_constructor_definitions ctordefs in
-      return ([], (OpaqueIDMap.empty, ssig))
+      return ([], (OpaqueIDMap.empty, ssig), [])
 
   | UTBindModule(modident, utsigopt2, utmod1) ->
       let (rng_mod, modnm) = modident in
-      let* (absmodsig1, binds1) = typecheck_module tyenv utmod1 in
+      let* (absmodsig1, binds1, cons1) = typecheck_module tyenv utmod1 in
       let* (quant, modsig) =
         match utsigopt2 with
         | None ->
@@ -885,20 +887,20 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
         let mentry = { mod_signature = modsig; } in
         StructSig.empty |> StructSig.add_module modnm mentry
       in
-      return (binds1, (quant, ssig))
+      return (binds1, (quant, ssig), cons1)
 
   | UTBindSignature((_, signm), utsig) ->
       let* absmodsig = typecheck_signature tyenv utsig in
       let ssig = StructSig.empty |> StructSig.add_signature signm absmodsig in
-      return ([], (OpaqueIDMap.empty, ssig))
+      return ([], (OpaqueIDMap.empty, ssig), [])
 
   | UTBindInclude(utmod) ->
-      let* (absmodsig, binds) = typecheck_module tyenv utmod in
+      let* (absmodsig, binds, cons) = typecheck_module tyenv utmod in
       let (quant, modsig) = absmodsig in
       begin
         match modsig with
         | ConcStructure(ssig) ->
-            return (binds, (quant, ssig))
+            return (binds, (quant, ssig), cons)
 
         | ConcFunctor(fsig) ->
             let (rng_mod, _) = utmod in
@@ -917,7 +919,7 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
       in
       let (tyenv, evids, macparamtys) = add_macro_parameters_to_type_environment tyenv pre macparams in
       let macty = InlineMacroType(macparamtys) in
-      let* (e1, ty1) = Typechecker.typecheck pre tyenv utast1 in
+      let* (e1, ty1, cons1) = Typechecker.typecheck pre tyenv utast1 in
       let* () = unify ty1 (Range.dummy "val-inline-macro", BaseType(InlineTextType)) in
       let evid = EvalVarID.fresh (rng_cs, csnm) in
       let ssig =
@@ -930,7 +932,7 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
         StructSig.empty |> StructSig.add_macro csnm macentry
       in
       let binds = [ Bind(Stage0, NonRec(evid, abstraction_list evids (Next(e1)))) ] in
-      return (binds, (OpaqueIDMap.empty, ssig))
+      return (binds, (OpaqueIDMap.empty, ssig), cons1)
 
   | UTBindBlockMacro(_attrs, (rng_cs, csnm), macparams, utast1) ->
       let pre =
@@ -944,7 +946,7 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
       in
       let (tyenv, evids, macparamtys) = add_macro_parameters_to_type_environment tyenv pre macparams in
       let macty = BlockMacroType(macparamtys) in
-      let* (e1, ty1) = Typechecker.typecheck pre tyenv utast1 in
+      let* (e1, ty1, cons1) = Typechecker.typecheck pre tyenv utast1 in
       let* () = unify ty1 (Range.dummy "val-block-macro", BaseType(BlockTextType)) in
       let evid = EvalVarID.fresh (rng_cs, csnm) in
       let ssig =
@@ -957,17 +959,17 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
         StructSig.empty |> StructSig.add_macro csnm macentry
       in
       let binds = [ Bind(Stage0, NonRec(evid, abstraction_list evids (Next(e1)))) ] in
-      return (binds, (OpaqueIDMap.empty, ssig))
+      return (binds, (OpaqueIDMap.empty, ssig), cons1)
 
 
-let main (tyenv : Typeenv.t) (absmodsig_opt : (signature abstracted) option) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list) ok =
+let main (tyenv : Typeenv.t) (absmodsig_opt : (signature abstracted) option) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list * mono_type_constraint list) ok =
   let open ResultMonad in
   match absmodsig_opt with
   | None ->
       typecheck_binding_list tyenv utbinds
 
   | Some(absmodsig) ->
-      let* ((_, ssig), binds) = typecheck_binding_list tyenv utbinds in
+      let* ((_, ssig), binds, cons) = typecheck_binding_list tyenv utbinds in
       let rng = Range.dummy "main_bindings" in (* TODO (error): give appropriate ranges *)
       let* (quant, modsig) = coerce_signature rng (ConcStructure(ssig)) absmodsig in
       let ssig =
@@ -975,4 +977,4 @@ let main (tyenv : Typeenv.t) (absmodsig_opt : (signature abstracted) option) (ut
         | ConcFunctor(_)      -> assert false
         | ConcStructure(ssig) -> ssig
       in
-      return ((quant, ssig), binds)
+      return ((quant, ssig), binds, cons)
