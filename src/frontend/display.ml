@@ -404,6 +404,35 @@ let rvf_poly (dispmap : DisplayMap.t) (prv : poly_row_variable) : string =
   | PolyRowBound(brid) -> dispmap |> DisplayMap.find_bound_row_id brid
 
 
+let show_type_constraint_expr (show_type : 'a -> string) ((_, con) : 'a type_constraint_expr) =
+  match con with
+  | ConstraintEqual(lhs, rhs) ->
+      let sl = show_type lhs in
+      let sr = show_type rhs in
+      Printf.sprintf "%s = %s" sl sr
+
+
+let show_type_constraint_attribute ((_, attr) : type_constraint_attribute) =
+  match attr with
+  | ConstraintAttribute(str) ->
+      Printf.sprintf "[@annot `%s`]" str
+
+
+let show_type_constraint_branch (show_type : 'a -> string) ((_, ConstraintBranch(con, attr)) : 'a type_constraint_branch) =
+  let scon = show_type_constraint_expr show_type con in
+  match attr with
+  | None -> scon
+  | Some attr -> Printf.sprintf "%s %s" scon (show_type_constraint_attribute attr)
+
+
+let show_type_constraint (show_type : 'a -> string) ((_, Constraint(con, alts)) : 'a type_constraint) =
+  let scon = show_type_constraint_branch show_type con in
+  let salts = alts |> List.map (show_type_constraint_branch show_type) in
+  if List.length salts = 0 then
+    Printf.sprintf "constraint %s" scon
+  else
+    Printf.sprintf "constraint try %s with %s" scon (salts |> String.concat " | ")
+
 let rec show_poly_row_by_map (dispmap : DisplayMap.t) (prow : poly_row) : string option =
   let NormalizedRow(pty_labmap, prv_opt) = TypeConv.normalize_poly_row prow in
   if LabelMap.cardinal pty_labmap = 0 then
@@ -443,12 +472,10 @@ let show_mono_type_double (ty1 : mono_type) (ty2 : mono_type) =
   let s2 = show_type show_row tvf Outmost ty2 in
   (s1, s2)
 
-let show_mono_type_constraint (cons : mono_type_constraint) =
-  match cons with
-  | ConstraintEqual(lhs, rhs) ->
-      let sl = show_mono_type lhs in
-      let sr = show_mono_type rhs in
-      Printf.sprintf "constraint %s = %s" sl sr
+
+let show_mono_type_constraint (con : mono_type_constraint) =
+  show_type_constraint show_mono_type con
+
 
 let rec show_poly_type (Poly(pty, cons) : poly_type) =
   let dispmap = DisplayMap.empty |> collect_ids_poly (Poly(pty, [])) in
@@ -460,11 +487,8 @@ and show_poly_type_body (dispmap : DisplayMap.t) (pty : poly_type_body) =
   show_type (show_poly_row_by_map dispmap) (tvf_poly dispmap) Outmost pty
 
 and show_poly_type_constraint (dispmap : DisplayMap.t) (con : poly_type_constraint) =
-  match con with
-  | ConstraintEqual(lhs, rhs) ->
-      let sl = show_poly_type_body dispmap lhs in
-      let sr = show_poly_type_body dispmap rhs in
-      Printf.sprintf "constraint %s = %s" sl sr
+  show_type_constraint (show_poly_type_body dispmap) con
+
 
 let show_poly_macro_parameter_type (macparamty : poly_macro_parameter_type) =
   match macparamty with

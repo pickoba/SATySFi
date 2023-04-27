@@ -795,6 +795,13 @@ let report_type_error = function
       ]
 
 
+let report_type_constraint_error (attr : type_constraint_attribute option) (tyerr : type_error) =
+  let _ = match attr with
+  | Some(rng, ConstraintAttribute(str)) -> Printf.printf "[Constraint at %s] %s\n" (Range.to_string rng) str
+  | _ -> () in
+  report_type_error tyerr
+
+
 let show_yaml_context (context : YamlDecoder.context) =
   match context with
   | [] ->
@@ -977,6 +984,9 @@ let report_config_error : config_error -> unit = function
 
   | TypeError(tyerr) ->
       report_type_error tyerr
+  
+  | TypeConstraintError(attr, tyerr) ->
+      report_type_constraint_error attr tyerr
 
   | CyclicFileDependency(cycle) ->
       let pairs =
@@ -1760,8 +1770,8 @@ let build
         let _ = cons |> List.iter (fun con ->
           Printf.printf "trying to apply %s\n" (Display.show_mono_type_constraint con);
           match TypeConv.solve_constraint con with
-          | Ok(()) -> ()
-          | Error(e) -> raise (ConfigError(TypeError(e)))
+          | Ok () -> ()
+          | Error (annot, e) -> raise (ConfigError(TypeConstraintError(annot, e)))
         ) in
         Printf.printf " --------------------------\n";
         (* TED: solve constraints END *)

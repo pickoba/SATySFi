@@ -227,10 +227,24 @@ let decode_manual_macro_type (pre : pre) (tyenv : Typeenv.t) (mmacty : manual_ma
       let* macparamtys = mmacparamtys |> mapM (decode_manual_macro_parameter_type pre tyenv) in
       return @@ BlockMacroType(macparamtys)
 
-let decode_manual_constraint (pre : pre) (tyenv : Typeenv.t) ((_, mcons) : manual_constraint) : mono_type_constraint ok =
+
+let decode_manual_constraint_expr (pre : pre) (tyenv : Typeenv.t) ((rng, mcons) : manual_constraint_expr) : mono_type_constraint_expr ok =
   let open ResultMonad in
   match mcons with
-  | MConstraintEqual(lhs, rhs) ->
+  | ConstraintEqual(lhs, rhs) ->
       let* tyL = decode_manual_type pre tyenv lhs in
       let* tyR = decode_manual_type pre tyenv rhs in
-      return @@ ConstraintEqual(tyL, tyR)
+      return @@ (rng, ConstraintEqual(tyL, tyR))
+
+
+let decode_manual_constraint_branch (pre : pre) (tyenv : Typeenv.t) ((rng, ConstraintBranch(con, attr)) : manual_constraint_branch) : mono_type_constraint_branch ok =
+  let open ResultMonad in
+  let* con = decode_manual_constraint_expr pre tyenv con in
+  return @@ (rng, ConstraintBranch(con, attr))
+
+
+let decode_manual_constraint (pre : pre) (tyenv : Typeenv.t) ((rng, Constraint(con, alts)) : manual_constraint) : mono_type_constraint ok =
+  let open ResultMonad in
+  let* con = decode_manual_constraint_branch pre tyenv con in
+  let* alts = alts |> mapM (decode_manual_constraint_branch pre tyenv) in
+  return @@ (rng, Constraint(con, alts))

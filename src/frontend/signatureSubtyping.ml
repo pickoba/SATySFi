@@ -181,10 +181,17 @@ and substitute_poly_type (subst : substitution) (Poly(pty, cons) : poly_type) : 
     | CommandArgType(ptylabmap, pty) -> CommandArgType(ptylabmap |> LabelMap.map aux, aux pty)
   in
 
-  let substituted_cons = cons |> List.map (function
-    | ConstraintEqual(lhs, rhs) -> ConstraintEqual(aux lhs, aux rhs)
-  ) in
-  Poly(aux pty, substituted_cons)
+  let rec aux_constraint = function
+    | (rng, Constraint(con, alts)) -> (rng, Constraint(aux_constraint_branch con, alts |> List.map aux_constraint_branch))
+  
+  and aux_constraint_branch = function
+    | (rng, ConstraintBranch(con, attr)) -> (rng, ConstraintBranch(aux_constraint_expr con, attr))
+  
+  and aux_constraint_expr = function
+    | (rng, ConstraintEqual(lhs, rhs)) -> (rng, ConstraintEqual(aux lhs, aux rhs))
+  in
+
+  Poly(aux pty, cons |> List.map aux_constraint)
 
 
 and substitute_type_id (subst : substitution) (tyid_from : TypeID.t) : TypeID.t =

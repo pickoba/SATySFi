@@ -79,6 +79,31 @@ module EvalVarIDMap = Map.Make(EvalVarID)
 
 module OpaqueIDSet = Set.Make(TypeID)
 
+type 'a type_constraint =
+  'a type_constraint_main ranged
+
+and 'a type_constraint_main =
+  | Constraint of 'a type_constraint_branch * 'a type_constraint_branch list
+
+and 'a type_constraint_branch =
+  'a type_constraint_branch_main ranged
+
+and 'a type_constraint_branch_main =
+  | ConstraintBranch of 'a type_constraint_expr * type_constraint_attribute option
+
+and 'a type_constraint_expr =
+  'a type_constraint_expr_main ranged
+
+and 'a type_constraint_expr_main =
+  | ConstraintEqual of 'a * 'a
+
+and type_constraint_attribute =
+  type_constraint_attribute_main ranged
+
+and type_constraint_attribute_main =
+  | ConstraintAttribute of string
+[@@deriving show]
+
 type manual_type =
   Range.t * manual_type_main
 
@@ -109,10 +134,15 @@ type manual_kind =
 [@@deriving show]
 
 type manual_constraint =
-  manual_constraint_main ranged
+  manual_type type_constraint
+[@@deriving show]
 
-and manual_constraint_main =
-  | MConstraintEqual of manual_type * manual_type
+type manual_constraint_branch =
+  manual_type type_constraint_branch
+[@@deriving show]
+
+type manual_constraint_expr =
+  manual_type type_constraint_expr
 [@@deriving show]
 
 type base_type =
@@ -233,9 +263,6 @@ and ('a, 'b) row =
   | RowVar   of 'b
   | RowEmpty
 
-and 'a type_constraint =
-  | ConstraintEqual of 'a * 'a
-
 and mono_row_variable_updatable =
   | MonoRowFree of FreeRowID.t
   | MonoRowLink of mono_row
@@ -265,6 +292,18 @@ and mono_type_constraint =
 
 and poly_type_constraint =
   poly_type_body type_constraint
+
+and mono_type_constraint_branch =
+  mono_type type_constraint_branch
+
+and poly_type_constraint_branch =
+  poly_type_body type_constraint_branch
+
+and mono_type_constraint_expr =
+  mono_type type_constraint_expr
+
+and poly_type_constraint_expr =
+  poly_type_body type_constraint_expr
 
 and mono_type =
   (mono_type_variable, mono_row_variable) typ

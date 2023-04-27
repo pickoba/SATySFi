@@ -237,13 +237,14 @@
 %token<Range.t>
   AND AS BLOCK COMMAND CONSTRAINT ELSE END FALSE FUN
   IF IN INCLUDE INLINE LET MOD MATCH MATH MODULE MUTABLE OF OPEN
-  REC SIG SIGNATURE STRUCT THEN TRUE TYPE VAL WITH PERSISTENT PACKAGE USE
+  REC SIG SIGNATURE STRUCT THEN TRUE TRY TYPE VAL WITH PERSISTENT PACKAGE USE
 
 %token<Range.t> BAR WILDCARD COLON ARROW REVERSED_ARROW SEMICOLON COMMA CONS ACCESS QUESTION COERCE
 
 %token<Range.t>
   L_PAREN R_PAREN L_SQUARE R_SQUARE L_RECORD R_RECORD
   L_BLOCK_TEXT R_BLOCK_TEXT L_INLINE_TEXT R_INLINE_TEXT L_MATH_TEXT R_MATH_TEXT
+  CONSTRAINT_ANNOT_L_SQUARE
 
 %token<Range.t * Types.attribute_name> ATTRIBUTE_L_SQUARE
 
@@ -813,8 +814,31 @@ typ_macro_arg:
   | EXACT_TILDE; mnty=typ_bot
       { MEarlyMacroParameter(mnty) }
 typ_constraint:
-  | tok=CONSTRAINT; mntyL=typ; EXACT_EQ; mntyR=typ;
-      { let rng = make_range (Tok tok) (Ranged mntyR) in (rng, MConstraintEqual(mntyL, mntyR)) }
+  | tok=CONSTRAINT; con=typ_constraint_branch
+      { let rng = make_range (Tok tok) (Ranged con) in (rng, Constraint(con, [])) }
+  | tok=CONSTRAINT; TRY; con=typ_constraint_branch; WITH; BAR?; alts=separated_nonempty_list(BAR, typ_constraint_branch)
+      { 
+        let alts_rng = make_range_from_list alts in
+        let rng = make_range (Tok tok) (Tok alts_rng) in
+        (rng, Constraint(con, alts))
+      }
+;
+typ_constraint_branch:
+  | expr=typ_constraint_expr; attr=option(typ_constraint_attr)
+      { let (rng, _) = expr in (rng, ConstraintBranch(expr, attr)) }
+;
+typ_constraint_expr:
+  | mntyL=typ; EXACT_EQ; mntyR=typ
+      { let rng = make_range (Ranged mntyL) (Ranged mntyR) in (rng, ConstraintEqual(mntyL, mntyR)) }
+;
+typ_constraint_attr:
+  | tokL=CONSTRAINT_ANNOT_L_SQUARE; str=STRING; tokR=R_SQUARE
+      { 
+        let (_, str, pre, post) = str in
+        let str = omit_spaces pre post str in
+        let rng = make_range (Tok tokL) (Tok tokR) in
+        (rng, ConstraintAttribute(str))
+      }
 ;
 expr:
   | tokL=MATCH; utast=expr; WITH; BAR?; branches=separated_nonempty_list(BAR, branch); tokR=END

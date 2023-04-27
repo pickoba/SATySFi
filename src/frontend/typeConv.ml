@@ -148,18 +148,32 @@ let make_row_instantiation_intern (lev : level) (brid_ht : mono_row_variable Bou
   intern_row
 
 
+let instantiate_constraint_expr intern_ty intern_row (rng, con) =
+  match con with
+  | ConstraintEqual(lhs, rhs) ->
+      let mty1 = instantiate_impl intern_ty intern_row lhs in
+      let mty2 = instantiate_impl intern_ty intern_row rhs in
+      (rng, ConstraintEqual(mty1, mty2))
+
+
+let instantiate_constraint_branch intern_ty intern_row (rng, ConstraintBranch(con, attr)) =
+  let con = instantiate_constraint_expr intern_ty intern_row con in
+  (rng, ConstraintBranch(con, attr))
+
+
+let instantiate_constraint intern_ty intern_row (rng, Constraint(con, alts)) =
+  let con = instantiate_constraint_branch intern_ty intern_row con in
+  let alts = alts |> List.map (instantiate_constraint_branch intern_ty intern_row) in
+  (rng, Constraint(con, alts))
+
+
 let instantiate (lev : level) (qtfbl : quantifiability) ((Poly(pty, cons)) : poly_type) : mono_type * mono_type_constraint list =
   let bid_ht = BoundIDHashTable.create 32 in
   let brid_ht = BoundRowIDHashTable.create 32 in
   let intern_ty = make_type_instantiation_intern lev qtfbl bid_ht in
   let intern_row = make_row_instantiation_intern lev brid_ht in
   let mty = instantiate_impl intern_ty intern_row pty in
-  let mcons = cons |> List.map (function
-    | ConstraintEqual(lhs, rhs) ->
-        let mty1 = instantiate_impl intern_ty intern_row lhs in
-        let mty2 = instantiate_impl intern_ty intern_row rhs in
-        ConstraintEqual(mty1, mty2)
-  ) in
+  let mcons = cons |> List.map (instantiate_constraint intern_ty intern_row) in
   (mty, mcons)
 
 
@@ -321,18 +335,32 @@ let make_row_generalization_intern (lev : level) (rvid_ht : BoundRowID.t FreeRow
   intern_row
 
 
+let generalize_constraint_expr intern_ty intern_row (rng, con) =
+  match con with
+  | ConstraintEqual(lhs, rhs) ->
+      let gen_lhs = lift_poly_general intern_ty intern_row lhs in
+      let gen_rhs = lift_poly_general intern_ty intern_row rhs in
+      (rng, ConstraintEqual(gen_lhs, gen_rhs))
+
+
+let generalize_constraint_branch intern_ty intern_row (rng, ConstraintBranch(con, attr)) =
+  let gen_con = generalize_constraint_expr intern_ty intern_row con in
+  (rng, ConstraintBranch(gen_con, attr))
+
+
+let generalize_constraint intern_ty intern_row (rng, Constraint(con, alts)) =
+  let gen_con = generalize_constraint_branch intern_ty intern_row con in
+  let gen_alts = alts |> List.map (generalize_constraint_branch intern_ty intern_row) in
+  (rng, Constraint(gen_con, gen_alts))
+
+
 let generalize (lev : level) (ty : mono_type) (cons : mono_type_constraint list): poly_type =
   let tvid_ht = FreeIDHashTable.create 32 in
   let rvid_ht = FreeRowIDHashTable.create 32 in
   let intern_ty = make_type_generalization_intern lev tvid_ht in
   let intern_row = make_row_generalization_intern lev rvid_ht in
   let gen_ty = lift_poly_general intern_ty intern_row ty in
-  let gen_cons = cons |> List.map (function
-    | ConstraintEqual(lhs, rhs) ->
-        let gen_lhs = lift_poly_general intern_ty intern_row lhs in
-        let gen_rhs = lift_poly_general intern_ty intern_row rhs in
-        ConstraintEqual(gen_lhs, gen_rhs)
-  ) in
+  let gen_cons = cons |> List.map (generalize_constraint intern_ty intern_row) in
   Poly(gen_ty, gen_cons)
 
 
@@ -553,11 +581,23 @@ and normalized_poly_row_equal (nomrow1 : normalized_poly_row) (nomrow2 : normali
     | _                                                      -> false
   end
 
-let solve_constraint (con : mono_type_constraint) : (unit, TypeError.type_error) result =
+
+let solve_constraint_expr ((_, con) : mono_type_constraint_expr) : (unit, TypeError.type_error) result =
   match con with
   | ConstraintEqual(lhs, rhs) ->
       Unification.unify_type lhs rhs
       |> Result.map_error (fun uerr -> TypeError.TypeUnificationError(lhs, rhs, uerr))
+
+
+let solve_constraint_branch ((_, ConstraintBranch(con, attr)) : mono_type_constraint_branch) : (unit, type_constraint_attribute option * TypeError.type_error) result =
+  solve_constraint_expr con
+  |> Result.map_error (fun err -> (attr, err))
+
+
+let solve_constraint ((_, Constraint(con, _)) : mono_type_constraint) : (unit, type_constraint_attribute option * TypeError.type_error) result =
+  (* TED: TODO: try other constraints *)
+  solve_constraint_branch con
+
 
 let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (pty : poly_type) : (poly_type, TypeError.type_error) result =
   let open ResultMonad in
@@ -565,6 +605,6 @@ let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (pty : poly_t
   | Poly(_, []) -> return pty
   | _ ->
       let (mty, cons) = instantiate (Level.succ lev) qtfbl pty in
-      let* _ = cons |> mapM solve_constraint in
+      let* _ = cons |> mapM solve_constraint |> Result.map_error (fun (_, e) -> e) in
       let pty = generalize lev mty [] in
       return pty
