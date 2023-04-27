@@ -193,10 +193,6 @@ rule lex_program stack = parse
       }
   | ("#[" (lower as s))
       { Stack.push ProgramState stack; ATTRIBUTE_L_SQUARE(get_pos lexbuf, s) }
-  (* TED START *)
-  | "[@annot"
-      { Stack.push ProgramState stack; CONSTRAINT_ANNOT_L_SQUARE(get_pos lexbuf) }
-  (* TED END *)
   | "`"+
       {
         let pos_start = get_pos lexbuf in

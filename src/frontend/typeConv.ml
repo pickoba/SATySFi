@@ -156,13 +156,17 @@ let instantiate_constraint_expr intern_ty intern_row (rng, con) =
       (rng, ConstraintEqual(mty1, mty2))
 
 
-let instantiate_constraint_branch intern_ty intern_row (rng, ConstraintBranch(con, attr)) =
-  let con = instantiate_constraint_expr intern_ty intern_row con in
-  (rng, ConstraintBranch(con, attr))
+let instantiate_constraint_branch intern_ty intern_row (rng, branch) =
+  match branch with
+  | ConstraintBranch(con, attr) ->
+      let con = instantiate_constraint_expr intern_ty intern_row con in
+      (rng, ConstraintBranch(con, attr))
+  | ConstraintBranchAny(attr) ->
+      (rng, ConstraintBranchAny(attr))
 
 
 let instantiate_constraint intern_ty intern_row (rng, Constraint(con, alts)) =
-  let con = instantiate_constraint_branch intern_ty intern_row con in
+  let con = instantiate_constraint_expr intern_ty intern_row con in
   let alts = alts |> List.map (instantiate_constraint_branch intern_ty intern_row) in
   (rng, Constraint(con, alts))
 
@@ -343,13 +347,17 @@ let generalize_constraint_expr intern_ty intern_row (rng, con) =
       (rng, ConstraintEqual(gen_lhs, gen_rhs))
 
 
-let generalize_constraint_branch intern_ty intern_row (rng, ConstraintBranch(con, attr)) =
-  let gen_con = generalize_constraint_expr intern_ty intern_row con in
-  (rng, ConstraintBranch(gen_con, attr))
+let generalize_constraint_branch intern_ty intern_row (rng, branch) =
+  match branch with
+  | ConstraintBranch(con, attr) ->
+      let gen_con = generalize_constraint_expr intern_ty intern_row con in
+      (rng, ConstraintBranch(gen_con, attr))
+  | ConstraintBranchAny(attr) ->
+      (rng, ConstraintBranchAny(attr))
 
 
 let generalize_constraint intern_ty intern_row (rng, Constraint(con, alts)) =
-  let gen_con = generalize_constraint_branch intern_ty intern_row con in
+  let gen_con = generalize_constraint_expr intern_ty intern_row con in
   let gen_alts = alts |> List.map (generalize_constraint_branch intern_ty intern_row) in
   (rng, Constraint(gen_con, gen_alts))
 
@@ -589,14 +597,9 @@ let solve_constraint_expr ((_, con) : mono_type_constraint_expr) : (unit, TypeEr
       |> Result.map_error (fun uerr -> TypeError.TypeUnificationError(lhs, rhs, uerr))
 
 
-let solve_constraint_branch ((_, ConstraintBranch(con, attr)) : mono_type_constraint_branch) : (unit, type_constraint_attribute option * TypeError.type_error) result =
-  solve_constraint_expr con
-  |> Result.map_error (fun err -> (attr, err))
-
-
 let solve_constraint ((_, Constraint(con, _)) : mono_type_constraint) : (unit, type_constraint_attribute option * TypeError.type_error) result =
-  (* TED: TODO: try other constraints *)
-  solve_constraint_branch con
+  (* TED: TODO: try other constraints; show messages *)
+  solve_constraint_expr con |> Result.map_error (fun err -> (None, err))
 
 
 let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (pty : poly_type) : (poly_type, TypeError.type_error) result =

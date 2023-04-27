@@ -83,13 +83,14 @@ type 'a type_constraint =
   'a type_constraint_main ranged
 
 and 'a type_constraint_main =
-  | Constraint of 'a type_constraint_branch * 'a type_constraint_branch list
+  | Constraint of 'a type_constraint_expr * 'a type_constraint_branch list
 
 and 'a type_constraint_branch =
   'a type_constraint_branch_main ranged
 
 and 'a type_constraint_branch_main =
-  | ConstraintBranch of 'a type_constraint_expr * type_constraint_attribute option
+  | ConstraintBranch of 'a type_constraint_expr * type_constraint_attribute
+  | ConstraintBranchAny of type_constraint_attribute
 
 and 'a type_constraint_expr =
   'a type_constraint_expr_main ranged

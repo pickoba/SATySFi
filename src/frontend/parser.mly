@@ -244,7 +244,6 @@
 %token<Range.t>
   L_PAREN R_PAREN L_SQUARE R_SQUARE L_RECORD R_RECORD
   L_BLOCK_TEXT R_BLOCK_TEXT L_INLINE_TEXT R_INLINE_TEXT L_MATH_TEXT R_MATH_TEXT
-  CONSTRAINT_ANNOT_L_SQUARE
 
 %token<Range.t * Types.attribute_name> ATTRIBUTE_L_SQUARE
 
@@ -814,29 +813,29 @@ typ_macro_arg:
   | EXACT_TILDE; mnty=typ_bot
       { MEarlyMacroParameter(mnty) }
 typ_constraint:
-  | tok=CONSTRAINT; con=typ_constraint_branch
+  | tok=CONSTRAINT; con=typ_constraint_expr
       { let rng = make_range (Tok tok) (Ranged con) in (rng, Constraint(con, [])) }
-  | tok=CONSTRAINT; TRY; con=typ_constraint_branch; WITH; BAR?; alts=separated_nonempty_list(BAR, typ_constraint_branch)
+  | tokL=CONSTRAINT; TRY; con=typ_constraint_expr; WITH; BAR?; alts=separated_nonempty_list(BAR, typ_constraint_branch); tokR=END
       { 
-        let alts_rng = make_range_from_list alts in
-        let rng = make_range (Tok tok) (Tok alts_rng) in
+        let rng = make_range (Tok tokL) (Tok tokR) in
         (rng, Constraint(con, alts))
       }
 ;
 typ_constraint_branch:
-  | expr=typ_constraint_expr; attr=option(typ_constraint_attr)
-      { let (rng, _) = expr in (rng, ConstraintBranch(expr, attr)) }
+  | expr=typ_constraint_expr; ARROW; attr=typ_constraint_attr
+      { let rng = make_range (Ranged expr) (Ranged attr) in (rng, ConstraintBranch(expr, attr)) }
+  | tokL=WILDCARD; ARROW; attr=typ_constraint_attr
+      { let rng = make_range (Tok tokL) (Ranged attr) in (rng, ConstraintBranchAny(attr)) }
 ;
 typ_constraint_expr:
-  | mntyL=typ; EXACT_EQ; mntyR=typ
+  | mntyL=typ_prod; EXACT_EQ; mntyR=typ_prod
       { let rng = make_range (Ranged mntyL) (Ranged mntyR) in (rng, ConstraintEqual(mntyL, mntyR)) }
 ;
 typ_constraint_attr:
-  | tokL=CONSTRAINT_ANNOT_L_SQUARE; str=STRING; tokR=R_SQUARE
+  | str=STRING
       { 
-        let (_, str, pre, post) = str in
+        let (rng, str, pre, post) = str in
         let str = omit_spaces pre post str in
-        let rng = make_range (Tok tokL) (Tok tokR) in
         (rng, ConstraintAttribute(str))
       }
 ;

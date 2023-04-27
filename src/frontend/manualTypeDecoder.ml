@@ -237,14 +237,18 @@ let decode_manual_constraint_expr (pre : pre) (tyenv : Typeenv.t) ((rng, mcons) 
       return @@ (rng, ConstraintEqual(tyL, tyR))
 
 
-let decode_manual_constraint_branch (pre : pre) (tyenv : Typeenv.t) ((rng, ConstraintBranch(con, attr)) : manual_constraint_branch) : mono_type_constraint_branch ok =
+let decode_manual_constraint_branch (pre : pre) (tyenv : Typeenv.t) ((rng, mbranch) : manual_constraint_branch) : mono_type_constraint_branch ok =
   let open ResultMonad in
-  let* con = decode_manual_constraint_expr pre tyenv con in
-  return @@ (rng, ConstraintBranch(con, attr))
+  match mbranch with
+  | ConstraintBranch(con, attr) ->
+      let* con = decode_manual_constraint_expr pre tyenv con in
+      return @@ (rng, ConstraintBranch(con, attr))
+  | ConstraintBranchAny(attr) ->
+      return @@ (rng, ConstraintBranchAny(attr))
 
 
 let decode_manual_constraint (pre : pre) (tyenv : Typeenv.t) ((rng, Constraint(con, alts)) : manual_constraint) : mono_type_constraint ok =
   let open ResultMonad in
-  let* con = decode_manual_constraint_branch pre tyenv con in
+  let* con = decode_manual_constraint_expr pre tyenv con in
   let* alts = alts |> mapM (decode_manual_constraint_branch pre tyenv) in
   return @@ (rng, Constraint(con, alts))

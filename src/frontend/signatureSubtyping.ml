@@ -182,10 +182,11 @@ and substitute_poly_type (subst : substitution) (Poly(pty, cons) : poly_type) : 
   in
 
   let rec aux_constraint = function
-    | (rng, Constraint(con, alts)) -> (rng, Constraint(aux_constraint_branch con, alts |> List.map aux_constraint_branch))
+    | (rng, Constraint(con, alts)) -> (rng, Constraint(aux_constraint_expr con, alts |> List.map aux_constraint_branch))
   
   and aux_constraint_branch = function
     | (rng, ConstraintBranch(con, attr)) -> (rng, ConstraintBranch(aux_constraint_expr con, attr))
+    | (rng, ConstraintBranchAny(attr)) -> (rng, ConstraintBranchAny(attr))
   
   and aux_constraint_expr = function
     | (rng, ConstraintEqual(lhs, rhs)) -> (rng, ConstraintEqual(aux lhs, aux rhs))

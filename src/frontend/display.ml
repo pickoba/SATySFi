@@ -415,18 +415,20 @@ let show_type_constraint_expr (show_type : 'a -> string) ((_, con) : 'a type_con
 let show_type_constraint_attribute ((_, attr) : type_constraint_attribute) =
   match attr with
   | ConstraintAttribute(str) ->
-      Printf.sprintf "[@annot `%s`]" str
+      Printf.sprintf "`%s`" str
 
 
-let show_type_constraint_branch (show_type : 'a -> string) ((_, ConstraintBranch(con, attr)) : 'a type_constraint_branch) =
-  let scon = show_type_constraint_expr show_type con in
-  match attr with
-  | None -> scon
-  | Some attr -> Printf.sprintf "%s %s" scon (show_type_constraint_attribute attr)
+let show_type_constraint_branch (show_type : 'a -> string) ((_, branch) : 'a type_constraint_branch) =
+  match branch with
+  | ConstraintBranch(con, attr) ->
+      let scon = show_type_constraint_expr show_type con in
+      Printf.sprintf "%s -> %s" scon (show_type_constraint_attribute attr)
+  | ConstraintBranchAny(attr) ->
+      Printf.sprintf "_ -> %s" (show_type_constraint_attribute attr)
 
 
 let show_type_constraint (show_type : 'a -> string) ((_, Constraint(con, alts)) : 'a type_constraint) =
-  let scon = show_type_constraint_branch show_type con in
+  let scon = show_type_constraint_expr show_type con in
   let salts = alts |> List.map (show_type_constraint_branch show_type) in
   if List.length salts = 0 then
     Printf.sprintf "constraint %s" scon
