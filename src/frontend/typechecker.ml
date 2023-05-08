@@ -659,7 +659,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
         let pty =
           if is_nonexpansive_expression e1 then
           (* If `e1` is polymorphically typeable: *)
-            TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1) []
+            TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1) cons1
           else
           (* If `e1` should be typed monomorphically: *)
             TypeConv.lift_poly (TypeConv.erase_range_of_type ty1)
@@ -1241,7 +1241,7 @@ and typecheck_letrec (pre : pre) (tyenv : Typeenv.t) (utrecbinds : untyped_let_b
 
   let tuples =
     tupleacc |> Alist.to_list |> List.map (fun (varnm, ty, evid, recbind, cons) ->
-      let pty = TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty) [] in
+      let pty = TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty) cons in
       (varnm, pty, evid, recbind, cons)
     )
   in

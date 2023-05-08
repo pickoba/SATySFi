@@ -762,8 +762,7 @@ and typecheck_nonrec (pre : pre) (tyenv : Typeenv.t) (ident : var_name ranged) (
   let should_be_polymorphic = true in
     let pty =
       if should_be_polymorphic then
-        (* TED: Implementation does not generete constraints. *)
-        TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1) []
+        TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1) cons1
       else
         TypeConv.lift_poly (TypeConv.erase_range_of_type ty1)
     in
