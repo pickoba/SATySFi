@@ -588,26 +588,3 @@ and normalized_poly_row_equal (nomrow1 : normalized_poly_row) (nomrow2 : normali
     | (Some(PolyRowBound(brid1)), Some(PolyRowBound(brid2))) -> BoundRowID.equal brid1 brid2
     | _                                                      -> false
   end
-
-
-let solve_constraint_expr ((_, con) : mono_type_constraint_expr) : (unit, TypeError.type_error) result =
-  match con with
-  | ConstraintEqual(lhs, rhs) ->
-      Unification.unify_type lhs rhs
-      |> Result.map_error (fun uerr -> TypeError.TypeUnificationError(lhs, rhs, uerr))
-
-
-let solve_constraint ((_, Constraint(con, _)) : mono_type_constraint) : (unit, type_constraint_attribute option * TypeError.type_error) result =
-  (* TED: TODO: try other constraints; show messages *)
-  solve_constraint_expr con |> Result.map_error (fun err -> (None, err))
-
-
-let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (pty : poly_type) : (poly_type, TypeError.type_error) result =
-  let open ResultMonad in
-  match pty with
-  | Poly(_, []) -> return pty
-  | _ ->
-      let (mty, cons) = instantiate (Level.succ lev) qtfbl pty in
-      let* _ = cons |> mapM solve_constraint |> Result.map_error (fun (_, e) -> e) in
-      let pty = generalize lev mty [] in
-      return pty

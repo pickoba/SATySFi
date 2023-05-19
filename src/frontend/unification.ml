@@ -436,3 +436,289 @@ and unify_row (row1 : mono_row) (row2 : mono_row) : (unit, unification_error) re
 
   | (RowEmpty, RowCons(_, _, _)) ->
       err (RowContradiction(row1, row2))
+
+let rec unify_type_ted ((rng1, tymain1) as ty1 : mono_type) ((rng2, tymain2) as ty2 : mono_type) : (unit, unification_error) result =
+  let open ResultMonad in
+  match (tymain1, tymain2) with
+  | (BaseType(bty1), BaseType(bty2)) ->
+      if bty1 = bty2 then
+        return ()
+      else
+        err (TypeContradiction(ty1, ty2))
+
+  | (FuncType(optrow1, tydom1, tycod1), FuncType(optrow2, tydom2, tycod2)) ->
+      let* () = unify_row_ted optrow1 optrow2 in
+      let* () = unify_type_ted tydom1 tydom2 in
+      let* () = unify_type_ted tycod1 tycod2 in
+      return ()
+
+  | (InlineCommandType(cmdargtys1), InlineCommandType(cmdargtys2))
+  | (BlockCommandType(cmdargtys1), BlockCommandType(cmdargtys2))
+  | (MathCommandType(cmdargtys1), MathCommandType(cmdargtys2)) ->
+      let* zipped =
+        try
+          return @@ List.combine cmdargtys1 cmdargtys2
+        with
+        | Invalid_argument(_) ->
+            let len1 = List.length cmdargtys1 in
+            let len2 = List.length cmdargtys2 in
+            err (CommandArityMismatch(len1, len2))
+      in
+      zipped |> foldM (fun () (cmdargty1, cmdargty2) ->
+        let CommandArgType(ty_labmap1, ty1) = cmdargty1 in
+        let CommandArgType(ty_labmap2, ty2) = cmdargty2 in
+        let resmap =
+          LabelMap.merge (fun label tyopt1 tyopt2 ->
+            match (tyopt1, tyopt2) with
+            | (Some(ty1), Some(ty2)) -> Some(unify_type_ted ty1 ty2)
+            | (_, None) | (None, _)  -> Some(err (CommandOptionalLabelMismatch(label)))
+          ) ty_labmap1 ty_labmap2
+        in
+        let* () =
+          LabelMap.fold (fun _label res_elem res ->
+            res >>= fun () ->
+            res_elem
+          ) resmap (return ())
+        in
+        unify_type_ted ty1 ty2
+      ) ()
+
+  | (ProductType(tys1), ProductType(tys2)) ->
+      let ue = TypeContradiction(ty1, ty2) in
+      unify_list_ted ~error:ue (tys1 |> TupleList.to_list) (tys2 |> TupleList.to_list)
+
+  | (RecordType(row1), RecordType(row2)) ->
+      unify_row_ted row1 row2
+
+  | (DataType(tyargs1, tyid1), DataType(tyargs2, tyid2)) ->
+      let ue = TypeContradiction(ty1, ty2) in
+      if TypeID.equal tyid1 tyid2 then
+        unify_list_ted ~error:ue tyargs1 tyargs2
+      else
+        err ue
+
+  | (ListType(tysub1), ListType(tysub2)) -> unify_type_ted tysub1 tysub2
+  | (RefType(tysub1), RefType(tysub2))   -> unify_type_ted tysub1 tysub2
+  | (CodeType(tysub1), CodeType(tysub2)) -> unify_type_ted tysub1 tysub2
+
+  | (TypeVariable(Updatable{contents = MonoLink(tylinked1)}), _) -> unify_type_ted tylinked1 ty2
+  | (_, TypeVariable(Updatable{contents = MonoLink(tylinked2)})) -> unify_type_ted ty1 tylinked2
+
+  | (TypeVariable(Updatable({contents = MonoFree(fid1)})),
+      TypeVariable(Updatable({contents = MonoFree(fid2)}))) ->
+    if FreeID.equal fid1 fid2 then
+      return ()
+    else begin
+      match (UnificationMap.find_opt fid1, UnificationMap.find_opt fid2) with
+      | (Some(tylinked1), _) -> unify_type_ted tylinked1 ty2
+      | (_, Some(tylinked2)) -> unify_type_ted ty1 tylinked2
+      | (_, _) ->
+          (* Quantifiability and level are used to determine whether the type variable
+             can be quantified when let bound. Since [unify_type_ted] is performed after
+             normal type inference and is never let bound after that, there is no need
+             to manipulate them here. *)
+
+          let (fid_old, ty_new) = if Range.is_dummy rng1 then (fid1, ty2) else (fid2, ty1) in
+          UnificationMap.add fid_old ty_new;
+          return ()
+    end
+
+  | (TypeVariable(Updatable({contents = MonoFree(fid1)})), _) ->
+      begin
+        match UnificationMap.find_opt fid1 with
+        | Some(tylinked1) -> unify_type_ted tylinked1 ty2
+        | None ->
+            let chk = occurs fid1 ty2 in
+            if chk then
+              err (TypeVariableInclusion(fid1, ty2))
+            else begin
+              let ty2new = if Range.is_dummy rng1 then (rng2, tymain2) else (rng1, tymain2) in
+              UnificationMap.add fid1 ty2new;
+              return ()
+            end
+      end
+
+  | (_, TypeVariable(Updatable({contents = MonoFree(fid2)}))) ->
+      begin
+        match UnificationMap.find_opt fid2 with
+        | Some(tylinked2) -> unify_type_ted ty1 tylinked2
+        | None ->
+            let chk = occurs fid2 ty1 in
+            if chk then
+              err (TypeVariableInclusion(fid2, ty1))
+            else begin
+              let ty1new = if Range.is_dummy rng2 then (rng1, tymain1) else (rng2, tymain1) in
+              UnificationMap.add fid2 ty1new;
+              return ()
+            end
+      end
+
+  | (TypeVariable(MustBeBound(mbbid1)), TypeVariable(MustBeBound(mbbid2))) ->
+      if MustBeBoundID.equal mbbid1 mbbid2 then
+        return ()
+      else
+        err (TypeContradiction(ty1, ty2))
+
+  | _ ->
+      err (TypeContradiction(ty1, ty2))
+
+
+and unify_list_ted ~error:(ue : unification_error) (tys1 : mono_type list) (tys2 : mono_type list) : (unit, unification_error) result =
+  let open ResultMonad in
+  let* zipped =
+    try
+      return @@ List.combine tys1 tys2
+    with
+    | Invalid_argument(_) ->
+        err ue
+  in
+  zipped |> foldM (fun () (t1, t2) ->
+    unify_type_ted t1 t2
+  ) ()
+
+
+and solve_row_disjointness_ted (row : mono_row) (labset : LabelSet.t) : (unit, unification_error) result =
+  let open ResultMonad in
+  match row with
+  | RowCons((_rng, label), _ty, rowsub) ->
+      if labset |> LabelSet.mem label then
+        err (BreaksRowDisjointness(label))
+      else
+        solve_row_disjointness_ted rowsub labset
+
+  | RowVar(UpdatableRow{contents = MonoRowLink(rowsub)}) ->
+      solve_row_disjointness_ted rowsub labset
+
+  | RowVar(UpdatableRow{contents = MonoRowFree(frid0)}) ->
+      begin
+        match UnificationRowMap.find_opt frid0 with
+        | Some(rowlinked0) -> solve_row_disjointness_ted rowlinked0 labset
+        | None ->
+            (* TED: TODO: enable *)
+            (* let labset0 = FreeRowID.get_label_set frid0 in
+            FreeRowID.set_label_set frid0 (LabelSet.union labset0 labset); *)
+            return ()
+      end
+
+  | RowVar(MustBeBoundRow(mbbrid0)) ->
+      let labset0 = BoundRowID.get_label_set (MustBeBoundRowID.to_bound_id mbbrid0) in
+      if LabelSet.subset labset labset0 then
+        return ()
+      else
+        err (InsufficientRowVariableConstraint(mbbrid0, labset, labset0))
+
+  | RowEmpty ->
+      return ()
+
+
+and solve_row_membership_ted (rng : Range.t) (label : label) (ty : mono_type) (row : mono_row) : (mono_row, unification_error) result =
+  let open ResultMonad in
+  match row with
+  | RowCons((rng0, label0), ty0, row0) ->
+      if String.equal label0 label then
+        let* () = unify_type_ted ty0 ty in
+        return row0
+      else
+        let* row0rest = solve_row_membership_ted rng label ty row0 in
+        return @@ RowCons((rng0, label0), ty0, row0rest)
+
+  | RowVar(UpdatableRow{contents = MonoRowLink(row0)}) ->
+      solve_row_membership_ted rng label ty row0
+
+  | RowVar(UpdatableRow({contents = MonoRowFree(frid0)})) ->
+      begin
+        match UnificationRowMap.find_opt frid0 with
+        | Some(rowlinked0) ->
+            solve_row_membership_ted rng label ty rowlinked0
+        | None ->
+            (* TED: TODO: label set is currently not updated during TED *)
+            let labset0 = FreeRowID.get_label_set frid0 in
+            if labset0 |> LabelSet.mem label then
+              err (BreaksLabelMembershipByFreeRowVariable(frid0, label, labset0))
+            else begin
+              let lev0 = FreeRowID.get_level frid0 in
+              let frid1 = FreeRowID.fresh lev0 LabelSet.empty in
+              let rvref1 = ref (MonoRowFree(frid1)) in
+              let row_rest = RowVar(UpdatableRow(rvref1)) in
+              let row_new = RowCons((rng, label), ty, row_rest) in
+              UnificationRowMap.add frid0 row_new;
+              return row_rest
+            end
+      end
+
+  | RowVar(MustBeBoundRow(mbbrid0)) ->
+      err (BreaksLabelMembershipByBoundRowVariable(mbbrid0, label))
+
+  | RowEmpty ->
+      err (BreaksLabelMembershipByEmptyRow(label))
+
+
+and unify_row_ted (row1 : mono_row) (row2 : mono_row) : (unit, unification_error) result =
+  let open ResultMonad in
+  match (row1, row2) with
+  | (RowVar(UpdatableRow{contents = MonoRowLink(row1sub)}), _) ->
+      unify_row_ted row1sub row2
+
+  | (_, RowVar(UpdatableRow{contents = MonoRowLink(row2sub)})) ->
+      unify_row_ted row1 row2sub
+
+  | (RowVar(UpdatableRow({contents = MonoRowFree(frid1)})), RowVar(UpdatableRow{contents = MonoRowFree(frid2)})) ->
+      if FreeRowID.equal frid1 frid2 then
+        return ()
+      else begin
+        match (UnificationRowMap.find_opt frid1, UnificationRowMap.find_opt frid2) with
+        | (Some(rowlinked1), _) -> unify_row_ted rowlinked1 row2
+        | (_, Some(rowlinked2)) -> unify_row_ted row1 rowlinked2
+        | (_, _) ->
+            UnificationRowMap.add frid1 row2;
+            return ()
+      end
+
+  | (RowVar(UpdatableRow({contents = MonoRowFree(frid1)})), _) ->
+      begin
+        match UnificationRowMap.find_opt frid1 with
+        | Some(rowlinked1) -> unify_row_ted rowlinked1 row2
+        | None ->
+            if occurs_row frid1 row2 then
+              err (RowVariableInclusion(frid1, row2))
+            else begin
+              let labset1 = FreeRowID.get_label_set frid1 in
+              let* () = solve_row_disjointness_ted row2 labset1 in
+              UnificationRowMap.add frid1 row2;
+              return ()
+            end
+      end
+
+  | (_, RowVar(UpdatableRow({contents = MonoRowFree(frid2)}))) ->
+      begin
+        match UnificationRowMap.find_opt frid2 with
+        | Some(rowlinked2) -> unify_row_ted row1 rowlinked2
+        | None ->
+            if occurs_row frid2 row1 then
+              err (RowVariableInclusion(frid2, row1))
+            else begin
+              let labset2 = FreeRowID.get_label_set frid2 in
+              let* () = solve_row_disjointness_ted row1 labset2 in
+              UnificationRowMap.add frid2 row1;
+              return ()
+            end
+      end
+
+  | (RowVar(MustBeBoundRow(mbbrid1)), RowVar(MustBeBoundRow(mbbrid2))) ->
+      if MustBeBoundRowID.equal mbbrid1 mbbrid2 then
+        return ()
+      else
+        err (RowContradiction(row1, row2))
+
+  | (RowVar(MustBeBoundRow(_)), _) | (_, RowVar(MustBeBoundRow(_))) ->
+        err (RowContradiction(row1, row2))
+
+  | (RowCons((rng, label), ty1, row1sub), _) ->
+      let* row2rest = solve_row_membership_ted rng label ty1 row2 in
+      unify_row_ted row1sub row2rest
+
+  | (RowEmpty, RowEmpty) ->
+      return ()
+
+  | (RowEmpty, RowCons(_, _, _)) ->
+      err (RowContradiction(row1, row2))

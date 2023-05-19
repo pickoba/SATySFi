@@ -564,7 +564,7 @@ and subtype_poly_type (pty1 : poly_type) (pty2 : poly_type) : bool =
         TypeConv.normalized_poly_row_equal nomprow nomprow2
   in
   (* TED: TODO: Is this level correct? *)
-  match TypeConv.apply_constraints_poly Level.bottom Quantifiable pty2 with
+  match TypeConstraint.apply_constraints_poly Level.bottom Quantifiable pty2 with
   | Ok(pty2) -> subtype_poly_type_impl internbid internbrid pty1 pty2
   | Error(_) -> false
   (*TED: TODO: We should return more informative message. *)

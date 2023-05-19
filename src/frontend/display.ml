@@ -475,6 +475,14 @@ let show_mono_type_double (ty1 : mono_type) (ty2 : mono_type) =
   (s1, s2)
 
 
+let show_mono_type_constraint_expr (con : mono_type_constraint_expr) =
+  show_type_constraint_expr show_mono_type con
+
+
+let show_mono_type_constraint_branch (branch : mono_type_constraint_branch) =
+  show_type_constraint_branch show_mono_type branch
+
+
 let show_mono_type_constraint (con : mono_type_constraint) =
   show_type_constraint show_mono_type con
 

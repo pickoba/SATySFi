@@ -1768,8 +1768,7 @@ let build
         (* TED: solve constraints START *)
         Printf.printf " -- (constraint solving) --\n";
         let _ = cons |> List.iter (fun con ->
-          Printf.printf "trying to apply %s\n" (Display.show_mono_type_constraint con);
-          match TypeConv.solve_constraint con with
+          match TypeConstraint.try_constraint con with
           | Ok () -> ()
           | Error (annot, e) -> raise (ConfigError(TypeConstraintError(annot, e)))
         ) in
