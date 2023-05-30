@@ -863,7 +863,7 @@ and typecheck_abstraction (pre : pre) (tyenv : Typeenv.t) (param_units : untyped
 
 
 
-and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre : pre) (tyenv : Typeenv.t) (utcmdargs : untyped_command_argument list) (cmdargtys : mono_command_argument_type list) : ((abstract_tree LabelMap.t * abstract_tree) list) ok =
+and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre : pre) (tyenv : Typeenv.t) (utcmdargs : untyped_command_argument list) (cmdargtys : mono_command_argument_type list) : ((abstract_tree LabelMap.t * abstract_tree) list * mono_type_constraint list) ok =
   let open ResultMonad in
   let* zipped =
     try
@@ -874,7 +874,7 @@ and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre :
       let arity_actual = List.length utcmdargs in
       err (InvalidArityOfCommandApplication(rngcmdapp, arity_expected, arity_actual))
   in
-  zipped |> mapM (fun (utcmdarg, cmdargty) ->
+  let* (acc, conacc) = zipped |> foldM (fun (acc, conacc) (utcmdarg, cmdargty) ->
     let UTCommandArg(labeled_utasts, utast1) = utcmdarg in
     let* utast_labmap =
       labeled_utasts |> foldM (fun utast_labmap ((rng, label), utast) ->
@@ -885,28 +885,33 @@ and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre :
       ) LabelMap.empty
     in
     let CommandArgType(ty_labmap, ty2) = cmdargty in
-    let* e_labmap =
-      LabelMap.mergeM (fun label utast_and_rng_opt ty_opt ->
-        match (utast_and_rng_opt, ty_opt) with
-        | (Some((utast1, _)), Some(ty2)) ->
-            (* TED: TODO: SHOULD USE *)
-            let* (e1, ty1, _cons1) = typecheck pre tyenv utast1 in
-            let* () = unify ty1 ty2 in
-            return @@ Some(e1)
+    let* (e_labmap, conacc) =
+      let* merged = 
+        LabelMap.mergeM (fun label utast_and_rng_opt ty_opt ->
+          match (utast_and_rng_opt, ty_opt) with
+          | (Some((utast1, _)), Some(ty2)) ->
+              return @@ Some(utast1, ty2)
 
-        | (Some((_, rng)), None) ->
-            err (UnexpectedOptionalLabel(rng, label, tycmd))
+          | (Some((_, rng)), None) ->
+              err (UnexpectedOptionalLabel(rng, label, tycmd))
 
-        | (None, _) ->
-            return None
+          | (None, _) ->
+              return None
 
-      ) utast_labmap ty_labmap
+        ) utast_labmap ty_labmap
+      in
+      LabelMap.foldM (fun label (utast1, ty2) (e_labmap, conacc) ->
+        let* (e1, ty1, cons1) = typecheck pre tyenv utast1 in
+        let* () = unify ty1 ty2 in
+        return (e_labmap |> LabelMap.add label e1, Alist.append conacc cons1)
+      ) merged (LabelMap.empty, conacc)
     in
-    (* TED: TODO: SHOULD USE *)
-    let* (e1, ty1, _cons1) = typecheck pre tyenv utast1 in
+    let* (e1, ty1, cons1) = typecheck pre tyenv utast1 in
     let* () = unify ty1 ty2 in
-    return (e_labmap, e1)
-  )
+    return (Alist.extend acc (e_labmap, e1), Alist.append conacc cons1)
+  ) (Alist.empty, Alist.empty)
+  in
+  return (acc |> Alist.to_list, conacc |> Alist.to_list)
 
 
 and typecheck_math (pre : pre) (tyenv : Typeenv.t) (utmes : untyped_math_text_element list) : (math_text_element list * mono_type_constraint list) ok =
@@ -932,11 +937,11 @@ and typecheck_math (pre : pre) (tyenv : Typeenv.t) (utmes : untyped_math_text_el
           begin
             match ty_cmd with
             | (_, MathCommandType(cmdargtys)) ->
-                let* args = typecheck_command_arguments ty_cmd rng pre tyenv utcmdarglst cmdargtys in
+                let* (args, cons_args) = typecheck_command_arguments ty_cmd rng pre tyenv utcmdarglst cmdargtys in
                 return (MathTextApplyCommand{
                   command   = e_cmd;
                   arguments = args;
-                }, cons_cmd)
+                }, cons @ cons_cmd @ cons_args)
 
             | (_, InlineCommandType(_)) ->
                 let (rng_cmd, _) = utast_cmd in
@@ -972,8 +977,8 @@ and typecheck_block_text (_rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (utbts
           | (_, BlockCommandType(cmdargtys)) -> cmdargtys
           | _                                -> assert false
         in
-        let* args = typecheck_command_arguments ty_cmd rng_cmdapp pre tyenv utcmdargs cmdargtys in
-        return (Alist.extend acc (BlockTextApplyCommand{ command = e_cmd; arguments = args }), cons @ cons_cmd)
+        let* (args, cons_args) = typecheck_command_arguments ty_cmd rng_cmdapp pre tyenv utcmdargs cmdargtys in
+        return (Alist.extend acc (BlockTextApplyCommand{ command = e_cmd; arguments = args }), cons @ cons_cmd @ cons_args)
 
     | (_, UTBlockTextContent(utast0)) ->
         let* (e0, ty0, cons0) = typecheck pre tyenv utast0 in
@@ -1028,8 +1033,8 @@ and typecheck_inline_text (_rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (utit
           | _ ->
               assert false
         in
-        let* args = typecheck_command_arguments ty_cmd rng_cmdapp pre tyenv utcmdargs cmdargtys in
-        return @@ (Alist.extend acc (InlineTextApplyCommand{ command = e_cmd; arguments = args }), cons @ cons_cmd)
+        let* (args, cons_args) = typecheck_command_arguments ty_cmd rng_cmdapp pre tyenv utcmdargs cmdargtys in
+        return @@ (Alist.extend acc (InlineTextApplyCommand{ command = e_cmd; arguments = args }), cons @ cons_cmd @ cons_args)
 
     | (_, UTInlineTextEmbeddedMath(utast_math)) ->
         let* (emath, tymath, cmath) = typecheck pre tyenv utast_math in
