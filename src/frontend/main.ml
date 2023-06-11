@@ -389,7 +389,7 @@ let report_parse_error = function
       ]
 
 
-let report_type_error = function
+let rec report_type_error = function
   | UndefinedVariable(rng, varnm, candidates) ->
       let candidates_message_lines =
         match make_candidates_message candidates with
@@ -622,6 +622,12 @@ let report_type_error = function
         detail;
       ])
 
+  | ConstraintError(attr, inner) ->
+      let _ = match attr with
+      | Some(rng, ConstraintAttribute(str)) -> Printf.printf "[Constraint at %s] %s\n" (Range.to_string rng) str
+      | _ -> () in
+      report_type_error inner
+
   | TypeParameterBoundMoreThanOnce(rng, tyvarnm) ->
       report_error Typechecker [
         NormalLine(Printf.sprintf "at %s:" (Range.to_string rng));
@@ -793,13 +799,6 @@ let report_type_error = function
         NormalLine(Printf.sprintf "at %s:" (Range.to_string rng));
         NormalLine("tests must be stage-1 non-recursive bindings.");
       ]
-
-
-let report_type_constraint_error (attr : type_constraint_attribute option) (tyerr : type_error) =
-  let _ = match attr with
-  | Some(rng, ConstraintAttribute(str)) -> Printf.printf "[Constraint at %s] %s\n" (Range.to_string rng) str
-  | _ -> () in
-  report_type_error tyerr
 
 
 let show_yaml_context (context : YamlDecoder.context) =
@@ -985,9 +984,6 @@ let report_config_error : config_error -> unit = function
   | TypeError(tyerr) ->
       report_type_error tyerr
   
-  | TypeConstraintError(attr, tyerr) ->
-      report_type_constraint_error attr tyerr
-
   | CyclicFileDependency(cycle) ->
       let pairs =
         match cycle with
@@ -1770,7 +1766,7 @@ let build
         let _ = cons |> List.iter (fun con ->
           match TypeConstraint.try_constraint con with
           | Ok () -> ()
-          | Error (annot, e) -> raise (ConfigError(TypeConstraintError(annot, e)))
+          | Error(e) -> raise (ConfigError(TypeError(e)))
         ) in
         Printf.printf " --------------------------\n";
         (* TED: solve constraints END *)

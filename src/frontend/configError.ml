@@ -80,7 +80,6 @@ type config_error =
   | CyclicLockDependency      of (lock_name * untyped_package) cycle
   | NotALibraryFile           of abs_path
   | TypeError                 of TypeError.type_error
-  | TypeConstraintError       of type_constraint_attribute option * TypeError.type_error
   | FileModuleNotFound        of Range.t * module_name
   | FileModuleNameConflict    of module_name * abs_path * abs_path
   | NotADocumentFile          of abs_path * mono_type

@@ -18,7 +18,7 @@ let try_constraint_expr (con : mono_type_constraint_expr) : (unit, TypeError.typ
   )
 
 
-let try_constraint ((_, Constraint(con, alts)) : mono_type_constraint) : (unit, type_constraint_attribute option * TypeError.type_error) result =
+let try_constraint ((_, Constraint(con, alts)) : mono_type_constraint) : (unit, TypeError.type_error) result =
   Printf.printf "trying %s ... " (Display.show_mono_type_constraint_expr con);
   try_constraint_expr con
   |> Result.map (fun () -> Printf.printf "ok\n")
@@ -40,7 +40,7 @@ let try_constraint ((_, Constraint(con, alts)) : mono_type_constraint) : (unit, 
             Some(attr)
       ) None
     in
-    (attr, err)
+    TypeError.ConstraintError(attr, err)
   )
 
 
