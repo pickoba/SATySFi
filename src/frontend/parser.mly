@@ -814,11 +814,11 @@ typ_macro_arg:
       { MEarlyMacroParameter(mnty) }
 typ_constraint:
   | tok=CONSTRAINT; con=typ_constraint_expr
-      { let rng = make_range (Tok tok) (Ranged con) in (rng, Constraint(con, [])) }
+      { let rng = make_range (Tok tok) (Ranged con) in (rng, ConstraintSelection(con, [])) }
   | tokL=CONSTRAINT; TRY; con=typ_constraint_expr; WITH; BAR?; alts=separated_nonempty_list(BAR, typ_constraint_branch); tokR=END
       { 
         let rng = make_range (Tok tokL) (Tok tokR) in
-        (rng, Constraint(con, alts))
+        (rng, ConstraintSelection(con, alts))
       }
 ;
 typ_constraint_branch:

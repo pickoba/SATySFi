@@ -104,7 +104,7 @@ let add_optionals_to_type_environment ~(cons : label ranged -> mono_type -> 'a -
       let tyenv =
         let ventry =
           {
-            val_type  = Poly(Primitives.option_type pbeta, []);
+            val_type  = Poly(Primitives.option_type pbeta, [], []);
             val_name  = Some(evid);
             val_stage = pre.stage;
           }
@@ -254,7 +254,7 @@ let rec typecheck_pattern (pre : pre) (tyenv : Typeenv.t) ((rng, utpatmain) : un
         return (PConstructor(ctornm, epat1), (rng, DataType(tyargs, tyid)), tyenv1)
 
 
-let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_abstract_tree) : (abstract_tree * mono_type * mono_type_constraint list) ok =
+let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_abstract_tree) : (abstract_tree * mono_type * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   let typecheck_iter ?s:(s = pre.stage) ?l:(l = pre.level) ?p:(p = pre.type_parameters) ?r:(r = pre.row_parameters) ?q:(q = pre.quantifiability) t u =
     let presub =
@@ -269,11 +269,11 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
     typecheck presub t u
   in
   match utastmain with
-  | UTIntegerConstant(nc) -> return (base (BCInt(nc))   , (rng, BaseType(IntType))   , [])
-  | UTFloatConstant(nc)   -> return (base (BCFloat(nc)) , (rng, BaseType(FloatType)) , [])
-  | UTStringConstant(sc)  -> return (base (BCString(sc)), (rng, BaseType(StringType)), [])
-  | UTBooleanConstant(bc) -> return (base (BCBool(bc))  , (rng, BaseType(BoolType))  , [])
-  | UTUnitConstant        -> return (base BCUnit        , (rng, BaseType(UnitType))  , [])
+  | UTIntegerConstant(nc) -> return (base (BCInt(nc))   , (rng, BaseType(IntType))   , [], TypeConstraintIDMap.empty)
+  | UTFloatConstant(nc)   -> return (base (BCFloat(nc)) , (rng, BaseType(FloatType)) , [], TypeConstraintIDMap.empty)
+  | UTStringConstant(sc)  -> return (base (BCString(sc)), (rng, BaseType(StringType)), [], TypeConstraintIDMap.empty)
+  | UTBooleanConstant(bc) -> return (base (BCBool(bc))  , (rng, BaseType(BoolType))  , [], TypeConstraintIDMap.empty)
+  | UTUnitConstant        -> return (base BCUnit        , (rng, BaseType(UnitType))  , [], TypeConstraintIDMap.empty)
 
   | UTPositionedString(ipos, s) ->
       begin
@@ -291,7 +291,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
               let ty2 = (Range.dummy "positioned2", BaseType(StringType)) in
               (rng, ProductType(TupleList.make ty1 ty2 []))
             in
-            return (e, ty, [])
+            return (e, ty, [], TypeConstraintIDMap.empty)
       end
 
   | UTLengthDescription(flt, unitnm) ->
@@ -303,19 +303,19 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
           | "inch" -> return @@ Length.of_inch flt
           | _      -> err (UnknownUnitOfLength(rng, unitnm))
         in
-        return (base (BCLength(len)), (rng, BaseType(LengthType)), [])
+        return (base (BCLength(len)), (rng, BaseType(LengthType)), [], TypeConstraintIDMap.empty)
 
   | UTInlineText(utits) ->
-      let* (its, cons) = typecheck_inline_text rng pre tyenv utits in
-      return (InlineText(its), (rng, BaseType(InlineTextType)), cons)
+      let* (its, crefs, smap) = typecheck_inline_text rng pre tyenv utits in
+      return (InlineText(its), (rng, BaseType(InlineTextType)), crefs, smap)
 
   | UTBlockText(utbts) ->
-      let* (bts, cons) = typecheck_block_text rng pre tyenv utbts in
-      return (BlockText(bts), (rng, BaseType(BlockTextType)), cons)
+      let* (bts, crefs, smap) = typecheck_block_text rng pre tyenv utbts in
+      return (BlockText(bts), (rng, BaseType(BlockTextType)), crefs, smap)
 
   | UTMathText(utmts) ->
-      let* (mts, cons) = typecheck_math pre tyenv utmts in
-      return (MathText(mts), (rng, BaseType(MathTextType)), cons)
+      let* (mts, crefs, smap) = typecheck_math pre tyenv utmts in
+      return (MathText(mts), (rng, BaseType(MathTextType)), crefs, smap)
 
   | UTOpenIn((rng_mod, modnm), utast1) ->
       begin
@@ -418,17 +418,17 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
             in
             return (ventry.val_type, e)
       in
-      let (tyfree, cons) = TypeConv.instantiate pre.level pre.quantifiability pty in
+      let (tyfree, crefs, smap) = TypeConv.instantiate pre.level pre.quantifiability pty in
       let tyres = TypeConv.overwrite_range_of_type tyfree rng in
-      return (e, tyres, cons)
+      return (e, tyres, crefs, smap)
 
   | UTConstructor(modidents, ctornm, utast1) ->
       let* centry = find_constructor rng tyenv modidents ctornm in
       let (tyargs, tyid, tyc) = instantiate_constructor pre centry in
-      let* (e1, ty1, cons) = typecheck_iter tyenv utast1 in
+      let* (e1, ty1, crefs, smap) = typecheck_iter tyenv utast1 in
       let* () = unify ty1 tyc in
       let tyres = (rng, DataType(tyargs, tyid)) in
-      return (NonValueConstructor(ctornm, e1), tyres, cons)
+      return (NonValueConstructor(ctornm, e1), tyres, crefs, smap)
 
   | UTLambdaInlineCommand{
       parameters       = param_units;
@@ -444,11 +444,11 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
           (ContextType, InlineBoxesType)
       in
       let evid_ctx = EvalVarID.fresh ident_ctx in
-      let* (e_body, ty_body, cons_body) =
+      let* (e_body, ty_body, crefs_body, smap_body) =
         let tyenv =
           let ventry =
             {
-              val_type  = Poly((rng_var, BaseType(bsty_var)), []);
+              val_type  = Poly((rng_var, BaseType(bsty_var)), [], []);
               val_name  = Some(evid_ctx);
               val_stage = pre.stage;
             }
@@ -468,7 +468,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
           CommandArgType(ty_labmap, ty_pat)
         )
       in
-      return (e, (rng, InlineCommandType(cmdargtys)), cons_body)
+      return (e, (rng, InlineCommandType(cmdargtys)), crefs_body, smap_body)
 
   | UTLambdaBlockCommand{
       parameters       = param_units;
@@ -484,11 +484,11 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
           (ContextType, BlockBoxesType)
       in
       let evid_ctx = EvalVarID.fresh ident_ctx in
-      let* (e_body, ty_body, cons_body) =
+      let* (e_body, ty_body, crefs_body, smap_body) =
         let tyenv_sub =
           let ventry =
             {
-              val_type  = Poly((rng_var, BaseType(bsty_var)), []);
+              val_type  = Poly((rng_var, BaseType(bsty_var)), [], []);
               val_name  = Some(evid_ctx);
               val_stage = pre.stage;
             }
@@ -508,7 +508,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
           CommandArgType(ty_labmap, ty_pat)
         )
       in
-      return (e, (rng, BlockCommandType(cmdargtys)), cons_body)
+      return (e, (rng, BlockCommandType(cmdargtys)), crefs_body, smap_body)
 
   | UTLambdaMathCommand{
       parameters       = param_units;
@@ -535,7 +535,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
       let tyenv =
         let ventry =
           {
-            val_type  = Poly((rng_ctx_var, BaseType(bsty_ctx_var)), []);
+            val_type  = Poly((rng_ctx_var, BaseType(bsty_ctx_var)), [], []);
             val_name  = Some(evid_ctx);
             val_stage = pre.stage;
           }
@@ -551,7 +551,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
             let (rng_sub_var, varnm_sub) = ident_sub in
             let (rng_sup_var, varnm_sup) = ident_sup in
             let pty_script rng =
-              Poly((rng, snd (Primitives.option_type (Range.dummy "sub-or-sup", BaseType(MathTextType)))), [])
+              Poly((rng, snd (Primitives.option_type (Range.dummy "sub-or-sup", BaseType(MathTextType)))), [], [])
             in
             let ventry_sub =
               {
@@ -574,7 +574,7 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
             in
             (tyenv, Some((evid_sub, evid_sup)))
       in
-      let* (e_body, ty_body, cons_body) = typecheck_iter tyenv utast_body in
+      let* (e_body, ty_body, crefs_body, smap_body) = typecheck_iter tyenv utast_body in
       let* () = unify ty_body (Range.dummy "lambda-math-return", BaseType(bsty_ret)) in
       let e =
         List.fold_right (fun (evid_labmap, pat, _, _) e ->
@@ -586,20 +586,26 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
           CommandArgType(ty_labmap, ty_pat)
         )
       in
-      return (e, (rng, MathCommandType(cmdargtys)), cons_body)
+      return (e, (rng, MathCommandType(cmdargtys)), crefs_body, smap_body)
 
   | UTApply(opts, utast1, utast2) ->
-      let* (e1, ty1, cons1) = typecheck_iter tyenv utast1 in
-      let* (e2, ty2, cons2) = typecheck_iter tyenv utast2 in
+      let* (e1, ty1, crefs1, smap1) = typecheck_iter tyenv utast1 in
+      let* (e2, ty2, crefs2, smap2) = typecheck_iter tyenv utast2 in
       let frid = FreeRowID.fresh pre.level LabelSet.empty in
-      let* (e_labmap0, labset0, cons0, row0) =
+      let* (e_labmap0, labset0, crefs0, smap0, row0) =
         let rvref = ref (MonoRowFree(frid)) in
-        opts |> foldM (fun (e_labmap, labset, cons, row) (rlabel, utast0) ->
+        opts |> foldM (fun (e_labmap, labset, crefs, smap, row) (rlabel, utast0) ->
           let (_, label) = rlabel in
-          let* (e0, ty0, cons0) = typecheck_iter tyenv utast0 in
+          let* (e0, ty0, crefs0, smap0) = typecheck_iter tyenv utast0 in
           (* TED: concatinate constraints; in order of optional arguments *)
-          return (e_labmap |> LabelMap.add label e0, labset |> LabelSet.add label, cons @ cons0, RowCons(rlabel, ty0, row))
-        ) (LabelMap.empty, LabelSet.empty, [], RowVar(UpdatableRow(rvref)))
+          return (
+            e_labmap |> LabelMap.add label e0,
+            labset |> LabelSet.add label,
+            crefs @ crefs0,
+            TypeConstraintIDMap.merge smap smap0,
+            RowCons(rlabel, ty0, row)
+          )
+        ) (LabelMap.empty, LabelSet.empty, [], TypeConstraintIDMap.empty, RowVar(UpdatableRow(rvref)))
       in
       let labset = FreeRowID.get_label_set frid in
       FreeRowID.set_label_set frid (LabelSet.union labset labset0);
@@ -611,14 +617,14 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
             let* () = unify ty2 tydom in
             let tycodnew = TypeConv.overwrite_range_of_type tycod rng in
             (* TED: concatinate constraints; optional argument -> argument -> function *)
-            return (eret, tycodnew, cons0 @ cons2 @ cons1)
+            return (eret, tycodnew, crefs0 @ crefs2 @ crefs1, TypeConstraintIDMap.merge_all [smap0; smap2; smap1])
 
         | (_, TypeVariable(_)) as ty1 ->
             let beta = fresh_type_variable rng pre in
             let* () = unify ty1 (get_range utast1, FuncType(row0, ty2, beta)) in
             (* TED: concatinate constraints; optional argument -> argument -> function *)
             (* TED: maybe the function comes from parameters *)
-            return (eret, beta, cons0 @ cons2 @ cons1)
+            return (eret, beta, crefs0 @ crefs2 @ crefs1, TypeConstraintIDMap.merge_all [smap0; smap2; smap1])
 
         | ty1 ->
             let (rng1, _) = utast1 in
@@ -634,32 +640,32 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
         add_optionals_to_type_environment ~cons ~nil tyenv pre opt_params
       in
       let utpatbr = UTPatternBranch(pat, utast1) in
-      let* (patbr, typat, ty1, cons) = typecheck_pattern_branch pre tyenv utpatbr in
+      let* (patbr, typat, ty1, crefs, smap) = typecheck_pattern_branch pre tyenv utpatbr in
       let* _unit_opt =
         mnty_opt |> optionM (fun mnty ->
           let* typat_annot = ManualTypeDecoder.decode_manual_type pre tyenv mnty in
           unify typat typat_annot
         )
       in
-      return (Function(evid_labmap, patbr), (rng, FuncType(optrow, typat, ty1)), cons)
+      return (Function(evid_labmap, patbr), (rng, FuncType(optrow, typat, ty1)), crefs, smap)
 
   | UTPatternMatch(utastO, utpatbrs) ->
-      let* (eO, tyO, cons0) = typecheck_iter tyenv utastO in
+      let* (eO, tyO, crefs0, smap0) = typecheck_iter tyenv utastO in
       let beta = fresh_type_variable (Range.dummy "ut-pattern-match") pre in
-      let* (patbrs, cons) = typecheck_pattern_branch_list pre tyenv utpatbrs tyO beta in
+      let* (patbrs, crefs, smap) = typecheck_pattern_branch_list pre tyenv utpatbrs tyO beta in
       Exhchecker.main rng patbrs tyO pre tyenv;
-      return (PatternMatch(rng, eO, patbrs), beta, cons0 @ cons)
+      return (PatternMatch(rng, eO, patbrs), beta, crefs0 @ crefs, TypeConstraintIDMap.merge smap0 smap)
 
   | UTLetIn(UTNonRec((ident, utast1)), utast2) ->
       let presub = { pre with level = Level.succ pre.level; } in
       let (_, varnm) = ident in
       let evid = EvalVarID.fresh ident in
-      let* (e1, ty1, cons1) = typecheck presub tyenv utast1 in
+      let* (e1, ty1, crefs1, smap1) = typecheck presub tyenv utast1 in
       let tyenv =
         let pty =
           if is_nonexpansive_expression e1 then
           (* If `e1` is polymorphically typeable: *)
-            TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1) cons1
+            TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty1) crefs1 []
           else
           (* If `e1` should be typed monomorphically: *)
             TypeConv.lift_poly (TypeConv.erase_range_of_type ty1)
@@ -673,15 +679,15 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
         in
         tyenv |> Typeenv.add_value varnm ventry
       in
-      let* (e2, ty2, cons2) = typecheck_iter tyenv utast2 in
+      let* (e2, ty2, crefs2, smap2) = typecheck_iter tyenv utast2 in
       (* TED: concatinate constraints; ast1 -> ast2 *)
-      return (LetNonRecIn(PVariable(evid), e1, e2), ty2, cons1 @ cons2)
+      return (LetNonRecIn(PVariable(evid), e1, e2), ty2, crefs1 @ crefs2, TypeConstraintIDMap.merge smap1 smap2)
 
   | UTLetIn(UTRec(utrecbinds), utast2) ->
       let* quints = typecheck_letrec pre tyenv utrecbinds in
-      let (tyenv, recbindacc, cons) =
-        quints |> List.fold_left (fun (tyenv, recbindacc, consacc) quint ->
-          let (x, pty, evid, recbind, cons) = quint in
+      let (tyenv, recbindacc, crefs, smap) =
+        quints |> List.fold_left (fun (tyenv, recbindacc, crefsacc, smapacc) quint ->
+          let (x, pty, evid, recbind, crefs, smap) = quint in
           let tyenv =
             let ventry =
               {
@@ -693,25 +699,25 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
             tyenv |> Typeenv.add_value x ventry
           in
           let recbindacc = Alist.extend recbindacc recbind in
-          (tyenv, recbindacc, consacc @ cons)
-        ) (tyenv, Alist.empty, [])
+          (tyenv, recbindacc, crefsacc @ crefs, TypeConstraintIDMap.merge smapacc smap)
+        ) (tyenv, Alist.empty, [], TypeConstraintIDMap.empty)
       in
-      let* (e2, ty2, cons2) = typecheck_iter tyenv utast2 in
-      return (LetRecIn(recbindacc |> Alist.to_list, e2), ty2, cons @ cons2)
+      let* (e2, ty2, crefs2, smap2) = typecheck_iter tyenv utast2 in
+      return (LetRecIn(recbindacc |> Alist.to_list, e2), ty2, crefs @ crefs2, TypeConstraintIDMap.merge smap smap2)
 
   | UTIfThenElse(utastB, utast1, utast2) ->
-      let* (eB, tyB, consB) = typecheck_iter tyenv utastB in
+      let* (eB, tyB, consB, crefsB) = typecheck_iter tyenv utastB in
       let* () = unify tyB (Range.dummy "if-bool", BaseType(BoolType)) in
-      let* (e1, ty1, cons1) = typecheck_iter tyenv utast1 in
-      let* (e2, ty2, cons2) = typecheck_iter tyenv utast2 in
+      let* (e1, ty1, cons1, crefs1) = typecheck_iter tyenv utast1 in
+      let* (e2, ty2, cons2, crefs2) = typecheck_iter tyenv utast2 in
       let* () = unify ty2 ty1 in
       (* TED: concatinate constraints; condition -> then clause -> else clause *)
-      return (IfThenElse(eB, e1, e2), ty1, consB @ cons1 @ cons2)
+      return (IfThenElse(eB, e1, e2), ty1, consB @ cons1 @ cons2, TypeConstraintIDMap.merge_all [crefsB; crefs1; crefs2])
 
   | UTLetIn(UTMutable(ident, utastI), utastA) ->
-      let* (tyenvI, evid, eI, _tyI, cI) = typecheck_let_mutable pre tyenv ident utastI in
-      let* (eA, tyA, consA) = typecheck_iter tyenvI utastA in
-      return (LetMutableIn(evid, eI, eA), tyA, cI @ consA)
+      let* (tyenvI, evid, eI, _tyI, cI, sI) = typecheck_let_mutable pre tyenv ident utastI in
+      let* (eA, tyA, crefsA, smapA) = typecheck_iter tyenvI utastA in
+      return (LetMutableIn(evid, eI, eA), tyA, cI @ crefsA, TypeConstraintIDMap.merge sI smapA)
 
   | UTOverwrite(ident, utastN) ->
       let (rng_var, _) = ident in
@@ -719,48 +725,49 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
       begin
         match sub with
         (* TED: Mutable variable itself cannot have constraints. *)
-        | (ContentOf(_, evid), tyvar, []) ->
-            let* (eN, tyN, consN) = typecheck_iter tyenv utastN in
+        | (ContentOf(_, evid), tyvar, [], _) ->
+            let* (eN, tyN, crefsN, smapN) = typecheck_iter tyenv utastN in
             let* () = unify tyvar (get_range utastN, RefType(tyN)) in
               (* Actually `get_range utastN` is not good
                  since the rhs expression has type `ty`, not `ref ty`. *)
-            return (Overwrite(evid, eN), (rng, BaseType(UnitType)), consN)
+            return (Overwrite(evid, eN), (rng, BaseType(UnitType)), crefsN, smapN)
 
         | _ ->
             assert false
       end
 
   | UTItemize(utitmz) ->
-      let* (eitmz, cons) = typecheck_itemize pre tyenv utitmz in
+      let* (eitmz, crefs, smap) = typecheck_itemize pre tyenv utitmz in
       let ty = TypeConv.overwrite_range_of_type (Primitives.itemize_type ()) rng in
-      return (eitmz, ty, cons)
+      return (eitmz, ty, crefs, smap)
 
   | UTListCons(utastH, utastT) ->
-      let* (eH, tyH, consH) = typecheck_iter tyenv utastH in
-      let* (eT, tyT, consT) = typecheck_iter tyenv utastT in
+      let* (eH, tyH, consH, smapH) = typecheck_iter tyenv utastH in
+      let* (eT, tyT, consT, smapT) = typecheck_iter tyenv utastT in
       let* () = unify tyT (Range.dummy "list-cons", ListType(tyH)) in
       let tyres = (rng, ListType(tyH)) in
       (* TED: Is this order reasonable? *)
-      return (PrimitiveListCons(eH, eT), tyres, consH @ consT)
+      return (PrimitiveListCons(eH, eT), tyres, consH @ consT, TypeConstraintIDMap.merge smapH smapT)
 
   | UTEndOfList ->
       let beta = fresh_type_variable rng pre in
-      return (ASTEndOfList, (rng, ListType(beta)), [])
+      return (ASTEndOfList, (rng, ListType(beta)), [], TypeConstraintIDMap.empty)
 
   | UTTuple(utasts) ->
       let* etys = TupleList.mapM (typecheck_iter tyenv) utasts in
       (* TED: TODO: ugly *)
-      let es = TupleList.map (fun (fst, _, _) -> fst) etys in
-      let tys = TupleList.map (fun (_, snd, _) -> snd) etys in
-      let cons = TupleList.map (fun (_, _, third) -> third) etys in
+      let es = TupleList.map (fun (fst, _, _, _) -> fst) etys in
+      let tys = TupleList.map (fun (_, snd, _, _) -> snd) etys in
+      let crefs = TupleList.map (fun (_, _, third, _) -> third) etys |> TupleList.to_list |> List.concat in
+      let smap = TupleList.map (fun (_, _, _, fourth) -> fourth) etys |> TupleList.to_list |> TypeConstraintIDMap.merge_all in
       let tyres = (rng, ProductType(tys)) in
-      return (PrimitiveTuple(es), tyres, cons |> TupleList.to_list |> List.concat)
+      return (PrimitiveTuple(es), tyres, crefs, smap)
 
   | UTRecord(fields) ->
       typecheck_record rng pre tyenv fields
 
   | UTAccessField(utast1, (_, label)) ->
-      let* (e1, ty1, cons1) = typecheck_iter tyenv utast1 in
+      let* (e1, ty1, crefs1, smap1) = typecheck_iter tyenv utast1 in
       let beta = fresh_type_variable rng pre in
       let row =
         let frid = fresh_free_row_id pre.level (LabelSet.singleton label) in
@@ -768,24 +775,23 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
         RowCons((Range.dummy "UTAccessField", label), beta, RowVar(UpdatableRow(rvuref)))
       in
       let* () = unify ty1 (Range.dummy "UTAccessField", RecordType(row)) in
-      return (AccessField(e1, label), beta, cons1)
+      return (AccessField(e1, label), beta, crefs1, smap1)
 
   | UTUpdateField(utast1, rlabel, utast2) ->
       let (_, label) = rlabel in
-      let* (e1, ty1, cons1) = typecheck_iter tyenv utast1 in
-      let* (e2, ty2, cons2) = typecheck_iter tyenv utast2 in
+      let* (e1, ty1, cons1, smap1) = typecheck_iter tyenv utast1 in
+      let* (e2, ty2, cons2, smap2) = typecheck_iter tyenv utast2 in
       let row =
         let frid = fresh_free_row_id pre.level (LabelSet.singleton label) in
         let rvuref = ref (MonoRowFree(frid)) in
         RowCons(rlabel, ty2, RowVar(UpdatableRow(rvuref)))
       in
       let* () = unify ty1 (Range.dummy "UTUpdateField", RecordType(row)) in
-      (* TED: Does this order reasonble? *)
-      return (UpdateField(e1, label, e2), ty1, cons1 @ cons2)
+      return (UpdateField(e1, label, e2), ty1, cons1 @ cons2, TypeConstraintIDMap.merge smap1 smap2)
 
   | UTReadInline(utast_ctx, utastI) ->
-      let* (e_ctx, ty_ctx, c_ctx) = typecheck_iter tyenv utast_ctx in
-      let* (eI, tyI, cI) = typecheck_iter tyenv utastI in
+      let* (e_ctx, ty_ctx, c_ctx, s_ctx) = typecheck_iter tyenv utast_ctx in
+      let* (eI, tyI, cI, sI) = typecheck_iter tyenv utastI in
       let (e_ret, bsty_ctx, bsty_ret) =
         if OptionState.is_text_mode () then
           (PrimitiveStringifyInline(e_ctx, eI), TextInfoType, StringType)
@@ -794,12 +800,11 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
       in
       let* () = unify ty_ctx (Range.dummy "ut-read-inline-1", BaseType(bsty_ctx)) in
       let* () = unify tyI (Range.dummy "ut-read-inline-2", BaseType(InlineTextType)) in
-      (* TED: Does this order reasonble? *)
-      return (e_ret, (rng, BaseType(bsty_ret)), c_ctx @ cI)
+      return (e_ret, (rng, BaseType(bsty_ret)), c_ctx @ cI, TypeConstraintIDMap.merge s_ctx sI)
 
   | UTReadBlock(utast_ctx, utastB) ->
-      let* (e_ctx, ty_ctx, c_ctx) = typecheck_iter tyenv utast_ctx in
-      let* (eB, tyB, cB) = typecheck_iter tyenv utastB in
+      let* (e_ctx, ty_ctx, c_ctx, s_ctx) = typecheck_iter tyenv utast_ctx in
+      let* (eB, tyB, cB, sB) = typecheck_iter tyenv utastB in
       let (e_ret, bsty_ctx, bsty_ret) =
         if OptionState.is_text_mode () then
           (PrimitiveStringifyBlock(e_ctx, eB), TextInfoType, StringType)
@@ -808,15 +813,14 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
       in
       let* () = unify ty_ctx (Range.dummy "ut-read-block-1", BaseType(bsty_ctx)) in
       let* () = unify tyB (Range.dummy "ut-read-block-2", BaseType(BlockTextType)) in
-      (* TED: Does this order reasonble? *)
-      return (e_ret, (rng, BaseType(bsty_ret)), c_ctx @ cB)
+      return (e_ret, (rng, BaseType(bsty_ret)), c_ctx @ cB, TypeConstraintIDMap.merge s_ctx sB)
 
   | UTNext(utast1) ->
       begin
         match pre.stage with
         | Stage0 ->
-            let* (e1, ty1, cons1) = typecheck_iter ~s:Stage1 tyenv utast1 in
-            return (Next(e1), (rng, CodeType(ty1)), cons1)
+            let* (e1, ty1, crefs1, smap1) = typecheck_iter ~s:Stage1 tyenv utast1 in
+            return (Next(e1), (rng, CodeType(ty1)), crefs1, smap1)
 
         | Stage1 | Persistent0 ->
             err (InvalidExpressionAsToStaging(rng, Stage0))
@@ -829,10 +833,10 @@ let rec typecheck (pre : pre) (tyenv : Typeenv.t) ((rng, utastmain) : untyped_ab
             err (InvalidExpressionAsToStaging(rng, Stage1))
 
         | Stage1 ->
-            let* (e1, ty1, cons1) = typecheck_iter ~s:Stage0 tyenv utast1 in
+            let* (e1, ty1, crefs1, smap1) = typecheck_iter ~s:Stage0 tyenv utast1 in
             let beta = fresh_type_variable rng pre in
             let* () = unify ty1 (Range.dummy "prev", CodeType(beta)) in
-            return (Prev(e1), beta, cons1)
+            return (Prev(e1), beta, crefs1, smap1)
       end
 
 
@@ -863,7 +867,7 @@ and typecheck_abstraction (pre : pre) (tyenv : Typeenv.t) (param_units : untyped
 
 
 
-and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre : pre) (tyenv : Typeenv.t) (utcmdargs : untyped_command_argument list) (cmdargtys : mono_command_argument_type list) : ((abstract_tree LabelMap.t * abstract_tree) list * mono_type_constraint list) ok =
+and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre : pre) (tyenv : Typeenv.t) (utcmdargs : untyped_command_argument list) (cmdargtys : mono_command_argument_type list) : ((abstract_tree LabelMap.t * abstract_tree) list * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   let* zipped =
     try
@@ -874,7 +878,7 @@ and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre :
       let arity_actual = List.length utcmdargs in
       err (InvalidArityOfCommandApplication(rngcmdapp, arity_expected, arity_actual))
   in
-  let* (acc, conacc) = zipped |> foldM (fun (acc, conacc) (utcmdarg, cmdargty) ->
+  let* (acc, crefsacc, smapacc) = zipped |> foldM (fun (acc, crefsacc, smapacc) (utcmdarg, cmdargty) ->
     let UTCommandArg(labeled_utasts, utast1) = utcmdarg in
     let* utast_labmap =
       labeled_utasts |> foldM (fun utast_labmap ((rng, label), utast) ->
@@ -885,7 +889,7 @@ and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre :
       ) LabelMap.empty
     in
     let CommandArgType(ty_labmap, ty2) = cmdargty in
-    let* (e_labmap, conacc) =
+    let* (e_labmap, crefsacc, smapacc) =
       let* merged = 
         LabelMap.mergeM (fun label utast_and_rng_opt ty_opt ->
           match (utast_and_rng_opt, ty_opt) with
@@ -900,48 +904,54 @@ and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre :
 
         ) utast_labmap ty_labmap
       in
-      LabelMap.foldM (fun label (utast1, ty2) (e_labmap, conacc) ->
-        let* (e1, ty1, cons1) = typecheck pre tyenv utast1 in
+      LabelMap.foldM (fun label (utast1, ty2) (e_labmap, crefsacc, smapacc) ->
+        let* (e1, ty1, crefs1, smap1) = typecheck pre tyenv utast1 in
+        (* TED: TODO: smap1 does not always contain all necessary selections *)
+        let* () = TypeConstraint.try_solving crefs1 smap1 in
+        let* () = TypeConstraint.apply_constraints_mono crefs1 smap1 in
         let* () = unify ty1 ty2 in
-        return (e_labmap |> LabelMap.add label e1, Alist.append conacc cons1)
-      ) merged (LabelMap.empty, conacc)
+        return (e_labmap |> LabelMap.add label e1, Alist.append crefsacc crefs1, TypeConstraintIDMap.merge smapacc smap1)
+      ) merged (LabelMap.empty, crefsacc, smapacc)
     in
-    let* (e1, ty1, cons1) = typecheck pre tyenv utast1 in
+    let* (e1, ty1, crefs1, smap1) = typecheck pre tyenv utast1 in
+    (* TED: TODO: smap1 does not always contain all necessary selections *)
+    let* () = TypeConstraint.try_solving crefs1 smap1 in
+    let* () = TypeConstraint.apply_constraints_mono crefs1 smap1 in
     let* () = unify ty1 ty2 in
-    return (Alist.extend acc (e_labmap, e1), Alist.append conacc cons1)
-  ) (Alist.empty, Alist.empty)
+    return (Alist.extend acc (e_labmap, e1), Alist.append crefsacc crefs1, TypeConstraintIDMap.merge smapacc smap1)
+  ) (Alist.empty, Alist.empty, TypeConstraintIDMap.empty)
   in
-  return (acc |> Alist.to_list, conacc |> Alist.to_list)
+  return (acc |> Alist.to_list, crefsacc |> Alist.to_list, smapacc)
 
 
-and typecheck_math (pre : pre) (tyenv : Typeenv.t) (utmes : untyped_math_text_element list) : (math_text_element list * mono_type_constraint list) ok =
+and typecheck_math (pre : pre) (tyenv : Typeenv.t) (utmes : untyped_math_text_element list) : (math_text_element list * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
 
   let iter (_b, utmes) = typecheck_math pre tyenv utmes in
 
   (* TED: TODO: There might be a function for this. *)
   let get_opt = function
-  | Some(a, l) -> (Some(a), l)
-  | None -> (None, [])
+  | Some(a, c, s) -> (Some(a), c, s)
+  | None -> (None, [], TypeConstraintIDMap.empty)
   in
 
-  utmes |> foldM (fun (acc, cons) utme ->
+  utmes |> foldM (fun (acc, crefs, smap) utme ->
     let (rng, UTMathTextElement{ base = utbase; sub = utsub_opt; sup = utsup_opt }) = utme in
-    let* (base, cons0) =
+    let* (base, crefs0, smap0) =
       match utbase with
       | UTMathTextChar(uch) ->
-          return (MathTextChar(uch), [])
+          return (MathTextChar(uch), [], TypeConstraintIDMap.empty)
 
       | UTMathTextApplyCommand(utast_cmd, utcmdarglst) ->
-          let* (e_cmd, ty_cmd, cons_cmd) = typecheck pre tyenv utast_cmd in
+          let* (e_cmd, ty_cmd, crefs_cmd, smap_cmd) = typecheck pre tyenv utast_cmd in
           begin
             match ty_cmd with
             | (_, MathCommandType(cmdargtys)) ->
-                let* (args, cons_args) = typecheck_command_arguments ty_cmd rng pre tyenv utcmdarglst cmdargtys in
+                let* (args, crefs_args, smap_args) = typecheck_command_arguments ty_cmd rng pre tyenv utcmdarglst cmdargtys in
                 return (MathTextApplyCommand{
                   command   = e_cmd;
                   arguments = args;
-                }, cons @ cons_cmd @ cons_args)
+                }, crefs_cmd @ crefs_args, TypeConstraintIDMap.merge smap_cmd smap_args)
 
             | (_, InlineCommandType(_)) ->
                 let (rng_cmd, _) = utast_cmd in
@@ -952,38 +962,46 @@ and typecheck_math (pre : pre) (tyenv : Typeenv.t) (utmes : untyped_math_text_el
           end
 
       | UTMathTextContent(utast0) ->
-          let* (e0, ty0, cons0) = typecheck pre tyenv utast0 in
+          let* (e0, ty0, crefs0, smap0) = typecheck pre tyenv utast0 in
           let* () = unify ty0 (Range.dummy "math-embedded-var", BaseType(MathTextType)) in
-          return (MathTextContent(e0), cons0)
+          return (MathTextContent(e0), crefs0, smap0)
     in
     (* TED: TODO: ugly *)
     let* sub = utsub_opt |> optionM iter in
-    let (sub, csub) = get_opt sub in
+    let (sub, csub, ssub) = get_opt sub in
     let* sup = utsup_opt |> optionM iter in
-    let (sup, csup) = get_opt sup in
-    return (Alist.extend acc (MathTextElement{ base; sub; sup }), cons @ cons0 @ csub @ csup)
-  ) (Alist.empty, []) >>= fun (acc, cons) ->
-  return (Alist.to_list acc, cons)
+    let (sup, csup, ssup) = get_opt sup in
+    return (
+      Alist.extend acc (MathTextElement{ base; sub; sup }),
+      crefs @ crefs0 @ csub @ csup,
+      TypeConstraintIDMap.merge_all [smap; smap0; ssub; ssup]
+    )
+  ) (Alist.empty, [], TypeConstraintIDMap.empty) >>= fun (acc, crefs, smap) ->
+  return (Alist.to_list acc, crefs, smap)
 
 
-and typecheck_block_text (_rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (utbts : untyped_block_text_element list) : (block_text_element list * mono_type_constraint list) ok =
+and typecheck_block_text (_rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (utbts : untyped_block_text_element list) : (block_text_element list * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
-  utbts |> foldM (fun (acc, cons) utbt ->
+  utbts |> foldM (fun (acc, crefs, smap) utbt ->
     match utbt with
     | (rng_cmdapp, UTBlockTextApplyCommand(utast_cmd, utcmdargs)) ->
-        let* (e_cmd, ty_cmd, cons_cmd) = typecheck pre tyenv utast_cmd in
+        let* (e_cmd, ty_cmd, crefs_cmd, smap_cmd) = typecheck pre tyenv utast_cmd in
         let cmdargtys =
           match ty_cmd with
           | (_, BlockCommandType(cmdargtys)) -> cmdargtys
           | _                                -> assert false
         in
-        let* (args, cons_args) = typecheck_command_arguments ty_cmd rng_cmdapp pre tyenv utcmdargs cmdargtys in
-        return (Alist.extend acc (BlockTextApplyCommand{ command = e_cmd; arguments = args }), cons @ cons_cmd @ cons_args)
+        let* (args, crefs_args, smap_args) = typecheck_command_arguments ty_cmd rng_cmdapp pre tyenv utcmdargs cmdargtys in
+        return (
+          Alist.extend acc (BlockTextApplyCommand{ command = e_cmd; arguments = args }),
+          crefs @ crefs_cmd @ crefs_args,
+          TypeConstraintIDMap.merge_all [smap; smap_cmd; smap_args]
+        )
 
     | (_, UTBlockTextContent(utast0)) ->
-        let* (e0, ty0, cons0) = typecheck pre tyenv utast0 in
+        let* (e0, ty0, crefs0, smap0) = typecheck pre tyenv utast0 in
         let* () = unify ty0 (Range.dummy "UTBlockTextContent", BaseType(BlockTextType)) in
-        return (Alist.extend acc (BlockTextContent(e0)), cons @ cons0)
+        return (Alist.extend acc (BlockTextContent(e0)), crefs @ crefs0, TypeConstraintIDMap.merge smap smap0)
 
     | (rng_app, UTBlockTextMacro(bmacro, utmacargs)) ->
         begin
@@ -1006,21 +1024,21 @@ and typecheck_block_text (_rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (utbts
                 | Some(evid) -> evid
                 | None       -> assert false
               in
-              let* (eargs, cargs) = typecheck_macro_arguments rng_app pre tyenv macparamtys utmacargs in
+              let* (eargs, cargs, sargs) = typecheck_macro_arguments rng_app pre tyenv macparamtys utmacargs in
               let eapp = apply_tree_of_list (ContentOf(rng_cs, evid)) eargs in
-              return (Alist.extend acc (BlockTextContent(Prev(eapp))), cons @ cargs)
+              return (Alist.extend acc (BlockTextContent(Prev(eapp))), crefs @ cargs, TypeConstraintIDMap.merge smap sargs)
         end
 
-  ) (Alist.empty, []) >>= fun (acc, cons) ->
-  return (Alist.to_list acc, cons)
+  ) (Alist.empty, [], TypeConstraintIDMap.empty) >>= fun (acc, crefs, smap) ->
+  return (Alist.to_list acc, crefs, smap)
 
 
-and typecheck_inline_text (_rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (utits : untyped_inline_text_element list) : (inline_text_element list * mono_type_constraint list) ok =
+and typecheck_inline_text (_rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (utits : untyped_inline_text_element list) : (inline_text_element list * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
-  utits |> foldM (fun (acc, cons) utit ->
+  utits |> foldM (fun (acc, crefs, smap) utit ->
     match utit with
     | (rng_cmdapp, UTInlineTextApplyCommand(utast_cmd, utcmdargs)) ->
-        let* (e_cmd, ty_cmd, cons_cmd) = typecheck pre tyenv utast_cmd in
+        let* (e_cmd, ty_cmd, crefs_cmd, smap_cmd) = typecheck pre tyenv utast_cmd in
         let* cmdargtys =
           match ty_cmd with
           | (_, InlineCommandType(cmdargtys)) ->
@@ -1033,24 +1051,28 @@ and typecheck_inline_text (_rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (utit
           | _ ->
               assert false
         in
-        let* (args, cons_args) = typecheck_command_arguments ty_cmd rng_cmdapp pre tyenv utcmdargs cmdargtys in
-        return @@ (Alist.extend acc (InlineTextApplyCommand{ command = e_cmd; arguments = args }), cons @ cons_cmd @ cons_args)
+        let* (args, crefs_args, smap_args) = typecheck_command_arguments ty_cmd rng_cmdapp pre tyenv utcmdargs cmdargtys in
+        return (
+          Alist.extend acc (InlineTextApplyCommand{ command = e_cmd; arguments = args }),
+          crefs @ crefs_cmd @ crefs_args,
+          TypeConstraintIDMap.merge_all [smap; smap_cmd; smap_args]
+        )
 
     | (_, UTInlineTextEmbeddedMath(utast_math)) ->
-        let* (emath, tymath, cmath) = typecheck pre tyenv utast_math in
+        let* (emath, tymath, cmath, smath) = typecheck pre tyenv utast_math in
         let* () = unify tymath (Range.dummy "ut-inline-text-embedded-math", BaseType(MathTextType)) in
-        return @@ (Alist.extend acc (InlineTextEmbeddedMath(emath)), cons @ cmath)
+        return (Alist.extend acc (InlineTextEmbeddedMath(emath)), crefs @ cmath, TypeConstraintIDMap.merge smap smath)
 
     | (_, UTInlineTextEmbeddedCodeArea(s)) ->
-        return @@ (Alist.extend acc (InlineTextEmbeddedCodeArea(s)), cons)
+        return (Alist.extend acc (InlineTextEmbeddedCodeArea(s)), crefs, smap)
 
     | (_, UTInlineTextContent(utast0)) ->
-        let* (e0, ty0, cons0) = typecheck pre tyenv utast0 in
+        let* (e0, ty0, crefs0, smap0) = typecheck pre tyenv utast0 in
         let* () = unify ty0 (Range.dummy "ut-inline-text-content", BaseType(InlineTextType)) in
-        return @@ (Alist.extend acc (InlineTextContent(e0)), cons @ cons0)
+        return (Alist.extend acc (InlineTextContent(e0)), crefs @ crefs0, TypeConstraintIDMap.merge smap smap0)
 
     | (_, UTInlineTextString(s)) ->
-        return @@ (Alist.extend acc (InlineTextString(s)), cons)
+        return (Alist.extend acc (InlineTextString(s)), crefs, smap)
 
     | (rng_app, UTInlineTextMacro(hmacro, utmacargs)) ->
         begin
@@ -1073,17 +1095,17 @@ and typecheck_inline_text (_rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (utit
                 | Some(evid) -> evid
                 | None       -> assert false
               in
-              let* (eargs, cargs) = typecheck_macro_arguments rng_app pre tyenv macparamtys utmacargs in
+              let* (eargs, cargs, sargs) = typecheck_macro_arguments rng_app pre tyenv macparamtys utmacargs in
               let eapp = apply_tree_of_list (ContentOf(rng_cs, evid)) eargs in
               (* TED: TODO: Should macros generate constraints? *)
-              return @@ (Alist.extend acc (InlineTextContent(Prev(eapp))), cons @ cargs)
+              return (Alist.extend acc (InlineTextContent(Prev(eapp))), crefs @ cargs, TypeConstraintIDMap.merge smap sargs)
         end
 
-  ) (Alist.empty, []) >>= fun (acc, cons) ->
-  return @@ (Alist.to_list acc, cons)
+  ) (Alist.empty, [], TypeConstraintIDMap.empty) >>= fun (acc, crefs, smap) ->
+  return (Alist.to_list acc, crefs, smap)
 
 
-and typecheck_macro_arguments (rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (macparamtys : mono_macro_parameter_type list) (utmacargs : untyped_macro_argument list) : (abstract_tree list * mono_type_constraint list) ok =
+and typecheck_macro_arguments (rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (macparamtys : mono_macro_parameter_type list) (utmacargs : untyped_macro_argument list) : (abstract_tree list * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   let* zipped =
     try
@@ -1092,16 +1114,16 @@ and typecheck_macro_arguments (rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (m
     | Invalid_argument(_) ->
         err (InvalidNumberOfMacroArguments(rng, macparamtys))
   in
-  let* (argacc, cons) =
-    zipped |> foldM (fun (argacc, cons) (macparamty, utmacarg) ->
+  let* (argacc, crefs, smap) =
+    zipped |> foldM (fun (argacc, crefs, smap) (macparamty, utmacarg) ->
       match macparamty with
       | LateMacroParameter(tyexp) ->
           begin
             match utmacarg with
             | UTLateMacroArg(utast) ->
-                let* (earg, tyarg, carg) = typecheck pre tyenv utast in
+                let* (earg, tyarg, carg, sarg) = typecheck pre tyenv utast in
                 let* () = unify tyarg tyexp in
-                return @@ (Alist.extend argacc (Next(earg)), cons @ carg)
+                return (Alist.extend argacc (Next(earg)), crefs @ carg, TypeConstraintIDMap.merge smap sarg)
                   (* Late arguments are converted to quoted arguments. *)
 
             | UTEarlyMacroArg((rngarg, _)) ->
@@ -1115,75 +1137,79 @@ and typecheck_macro_arguments (rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (m
                 err (EarlyMacroArgumentExpected(rngarg, tyexp))
 
             | UTEarlyMacroArg(utast) ->
-                let* (earg, tyarg, carg) = typecheck { pre with stage = Stage0 } tyenv utast in
+                let* (earg, tyarg, carg, sarg) = typecheck { pre with stage = Stage0 } tyenv utast in
                 let* () = unify tyarg tyexp in
-                return @@ (Alist.extend argacc earg, cons @ carg)
+                return (Alist.extend argacc earg, crefs @ carg, TypeConstraintIDMap.merge smap sarg)
           end
 
-    ) (Alist.empty, [])
+    ) (Alist.empty, [], TypeConstraintIDMap.empty)
   in
-  return (Alist.to_list argacc, cons)
+  return (Alist.to_list argacc, crefs, smap)
 
 
-and typecheck_record (rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (fields : (label ranged * untyped_abstract_tree) list) : (abstract_tree * mono_type * mono_type_constraint list) ok =
+and typecheck_record (rng : Range.t) (pre : pre) (tyenv : Typeenv.t) (fields : (label ranged * untyped_abstract_tree) list) : (abstract_tree * mono_type * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
-  let* (easc, row, cons) =
-    fields |> foldM (fun (easc, row, cons) (rlabel, utast) ->
+  let* (easc, row, crefs, smap) =
+    fields |> foldM (fun (easc, row, crefs, smap) (rlabel, utast) ->
       let (rng_label, label) = rlabel in
       if easc |> LabelMap.mem label then
         err (LabelUsedMoreThanOnce(rng_label, label))
       else
-        let* (e, ty, c) = typecheck pre tyenv utast in
+        let* (e, ty, c, s) = typecheck pre tyenv utast in
         (* TED: concatinate constraints; past -> this *)
-        return (easc |> LabelMap.add label e, RowCons(rlabel, ty, row), cons @ c)
-    ) (LabelMap.empty, RowEmpty, [])
+        return (easc |> LabelMap.add label e, RowCons(rlabel, ty, row), crefs @ c, TypeConstraintIDMap.merge smap s)
+    ) (LabelMap.empty, RowEmpty, [], TypeConstraintIDMap.empty)
   in
-  return (Record(easc), (rng, RecordType(row)), cons)
+  return (Record(easc), (rng, RecordType(row)), crefs, smap)
 
 
-and typecheck_itemize (pre : pre) (tyenv : Typeenv.t) (UTItem(utast1, utitmzlst)) : (abstract_tree * mono_type_constraint list) ok =
+and typecheck_itemize (pre : pre) (tyenv : Typeenv.t) (UTItem(utast1, utitmzlst)) : (abstract_tree * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
-  let* (e1, ty1, cons1) = typecheck pre tyenv utast1 in
+  let* (e1, ty1, crefs1, smap1) = typecheck pre tyenv utast1 in
   let* () = unify ty1 (Range.dummy "typecheck_itemize_string", BaseType(InlineTextType)) in
-  let* (e2, cons2) = typecheck_itemize_list pre tyenv utitmzlst in
+  let* (e2, crefs2, smap2) = typecheck_itemize_list pre tyenv utitmzlst in
   (* TED: concatinate constraints; this -> children *)
-  return (NonValueConstructor("Item", PrimitiveTuple(TupleList.make e1 e2 [])), cons1 @ cons2)
+  return (
+    NonValueConstructor("Item", PrimitiveTuple(TupleList.make e1 e2 [])),
+    crefs1 @ crefs2,
+    TypeConstraintIDMap.merge smap1 smap2
+  )
 
 
-and typecheck_itemize_list (pre : pre) (tyenv : Typeenv.t) (utitmzlst : untyped_itemize list) : (abstract_tree * mono_type_constraint list) ok =
+and typecheck_itemize_list (pre : pre) (tyenv : Typeenv.t) (utitmzlst : untyped_itemize list) : (abstract_tree * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   match utitmzlst with
   | [] ->
-      return (ASTEndOfList, [])
+      return (ASTEndOfList, [], TypeConstraintIDMap.empty)
 
   | hditmz :: tlitmzlst ->
-      let* (ehd, chd) = typecheck_itemize pre tyenv hditmz in
-      let* (etl, ctl) = typecheck_itemize_list pre tyenv tlitmzlst in
+      let* (ehd, chd, shd) = typecheck_itemize pre tyenv hditmz in
+      let* (etl, ctl, stl) = typecheck_itemize_list pre tyenv tlitmzlst in
       (* TED: concatinate constraints; this -> rest *)
-      return (PrimitiveListCons(ehd, etl), chd @ ctl)
+      return (PrimitiveListCons(ehd, etl), chd @ ctl, TypeConstraintIDMap.merge shd stl)
 
 
-and typecheck_pattern_branch (pre : pre) (tyenv : Typeenv.t) (utpatbr : untyped_pattern_branch) : (pattern_branch * mono_type * mono_type * mono_type_constraint list) ok =
+and typecheck_pattern_branch (pre : pre) (tyenv : Typeenv.t) (utpatbr : untyped_pattern_branch) : (pattern_branch * mono_type * mono_type * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   let UTPatternBranch(utpat, utast1) = utpatbr in
   let* (epat, typat, patvarmap) = typecheck_pattern pre tyenv utpat in
   let tyenvpat = add_pattern_var_mono pre tyenv patvarmap in
-  let* (e1, ty1, cons1) = typecheck pre tyenvpat utast1 in
-  return (PatternBranch(epat, e1), typat, ty1, cons1)
+  let* (e1, ty1, crefs1, smap1) = typecheck pre tyenvpat utast1 in
+  return (PatternBranch(epat, e1), typat, ty1, crefs1, smap1)
 
 
-and typecheck_pattern_branch_list (pre : pre) (tyenv : Typeenv.t) (utpatbrs : untyped_pattern_branch list) (tyobj : mono_type) (tyres : mono_type) : (pattern_branch list * mono_type_constraint list) ok =
+and typecheck_pattern_branch_list (pre : pre) (tyenv : Typeenv.t) (utpatbrs : untyped_pattern_branch list) (tyobj : mono_type) (tyres : mono_type) : (pattern_branch list * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
-  utpatbrs |> foldM (fun (patacc, consacc) utpatbr ->
-    let* (patbr, typat, ty1, cons) = typecheck_pattern_branch pre tyenv utpatbr in
+  utpatbrs |> foldM (fun (patacc, crefsacc, smapacc) utpatbr ->
+    let* (patbr, typat, ty1, crefs, smap) = typecheck_pattern_branch pre tyenv utpatbr in
     let* () = unify typat tyobj in
     let* () = unify ty1 tyres in
-    return (Alist.extend patacc patbr, consacc @ cons)
-  ) (Alist.empty, []) >>= fun (patbrs, cons) ->
-  return (Alist.to_list patbrs, cons)
+    return (Alist.extend patacc patbr, crefsacc @ crefs, TypeConstraintIDMap.merge smapacc smap)
+  ) (Alist.empty, [], TypeConstraintIDMap.empty) >>= fun (patbrs, crefs, smap) ->
+  return (Alist.to_list patbrs, crefs, smap)
 
 
-and typecheck_letrec (pre : pre) (tyenv : Typeenv.t) (utrecbinds : untyped_let_binding list) : ((var_name * poly_type * EvalVarID.t * letrec_binding * mono_type_constraint list) list) ok =
+and typecheck_letrec (pre : pre) (tyenv : Typeenv.t) (utrecbinds : untyped_let_binding list) : ((var_name * poly_type * EvalVarID.t * letrec_binding * mono_type_constraint_reference list * poly_type_constraint_selection_map) list) ok =
   let open ResultMonad in
 
   (* First, adds a type variable for each bound identifier. *)
@@ -1218,7 +1244,7 @@ and typecheck_letrec (pre : pre) (tyenv : Typeenv.t) (utrecbinds : untyped_let_b
   let* tupleacc =
     utrecacc |> Alist.to_list |> foldM (fun tupleacc utrec ->
       let (((_, varnm), utast1), beta, evid) = utrec in
-      let* (e1, ty1, cons1) = typecheck { pre with level = Level.succ pre.level; } tyenv utast1 in
+      let* (e1, ty1, crefs1, smap1) = typecheck { pre with level = Level.succ pre.level; } tyenv utast1 in
       begin
         match e1 with
         | Function(evid_labmap, patbr1) ->
@@ -1231,7 +1257,7 @@ and typecheck_letrec (pre : pre) (tyenv : Typeenv.t) (utrecbinds : untyped_let_b
               ) |> Option.value ~default:();
 *)
               let recbind = LetRecBinding(evid, patbr1) in
-              let tupleacc = Alist.extend tupleacc (varnm, beta, evid, recbind, cons1) in
+              let tupleacc = Alist.extend tupleacc (varnm, beta, evid, recbind, crefs1, smap1) in
               return tupleacc
             end else
               let (rng1, _) = utast1 in
@@ -1245,17 +1271,17 @@ and typecheck_letrec (pre : pre) (tyenv : Typeenv.t) (utrecbinds : untyped_let_b
   in
 
   let tuples =
-    tupleacc |> Alist.to_list |> List.map (fun (varnm, ty, evid, recbind, cons) ->
-      let pty = TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty) cons in
-      (varnm, pty, evid, recbind, cons)
+    tupleacc |> Alist.to_list |> List.map (fun (varnm, ty, evid, recbind, crefs, smap) ->
+      let pty = TypeConv.generalize pre.level (TypeConv.erase_range_of_type ty) crefs [] in
+      (varnm, pty, evid, recbind, crefs, smap)
     )
   in
   return tuples
 
 
-and typecheck_let_mutable (pre : pre) (tyenv : Typeenv.t) (ident : var_name ranged) (utastI : untyped_abstract_tree) : (Typeenv.t * EvalVarID.t * abstract_tree * mono_type * mono_type_constraint list) ok =
+and typecheck_let_mutable (pre : pre) (tyenv : Typeenv.t) (ident : var_name ranged) (utastI : untyped_abstract_tree) : (Typeenv.t * EvalVarID.t * abstract_tree * mono_type * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
-  let* (eI, tyI, cons) = typecheck { pre with quantifiability = Unquantifiable; } tyenv utastI in
+  let* (eI, tyI, crefs, smap) = typecheck { pre with quantifiability = Unquantifiable; } tyenv utastI in
   let (rng_var, varnm) = ident in
   let evid = EvalVarID.fresh ident in
   let tyenvI =
@@ -1268,10 +1294,10 @@ and typecheck_let_mutable (pre : pre) (tyenv : Typeenv.t) (ident : var_name rang
     in
     tyenv |> Typeenv.add_value varnm ventry
   in
-  return (tyenvI, evid, eI, tyI, cons)
+  return (tyenvI, evid, eI, tyI, crefs, smap)
 
 
-let main (stage : stage) (tyenv : Typeenv.t) (utast : untyped_abstract_tree) : (mono_type * abstract_tree * mono_type_constraint list) ok =
+let main (stage : stage) (tyenv : Typeenv.t) (utast : untyped_abstract_tree) : (mono_type * abstract_tree * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   let pre =
     {
@@ -1282,16 +1308,16 @@ let main (stage : stage) (tyenv : Typeenv.t) (utast : untyped_abstract_tree) : (
       level           = Level.bottom;
     }
   in
-  let* (e, ty, cons) = typecheck pre tyenv utast in
+  let* (e, ty, crefs, smap) = typecheck pre tyenv utast in
   (* TED: DEBUG START *)
   let () =
     Printf.printf " ---- ----\n";
-    Printf.printf "%d constraint(s) found\n" (List.length cons);
-    cons |> List.iter (fun con -> Printf.printf "%s\n" (Display.show_mono_type_constraint con));
+    Printf.printf "%d constraint reference(s) found\n" (List.length crefs);
+    crefs |> List.iter (fun cref -> Printf.printf "%s\n" (Display.show_mono_type_constraint_reference cref));
     Printf.printf " ---- ----\n"
   in
   (* TED: DEBUG END *)
-  return (ty, e, cons)
+  return (ty, e, crefs, smap)
 
 
 let are_unifiable (ty1 : mono_type) (ty2 : mono_type) : bool =

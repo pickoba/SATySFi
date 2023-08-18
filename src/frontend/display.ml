@@ -193,7 +193,7 @@ let collect_ids_mono_row (row : mono_row) (dispmap : DisplayMap.t) : DisplayMap.
 
 
 (* TED: Is it reasonable to discard the constraints? *)
-let collect_ids_poly (Poly(pty, _) : poly_type) (dispmap : DisplayMap.t) : DisplayMap.t =
+let collect_ids_poly (Poly(pty, _, _) : poly_type) (dispmap : DisplayMap.t) : DisplayMap.t =
   let fid_ht = DisplayMap.make_free_id_hash_set dispmap in
   let frid_ht = DisplayMap.make_free_row_id_hash_set dispmap in
   let bid_ht = DisplayMap.make_bound_id_hash_set dispmap in
@@ -404,12 +404,14 @@ let rvf_poly (dispmap : DisplayMap.t) (prv : poly_row_variable) : string =
   | PolyRowBound(brid) -> dispmap |> DisplayMap.find_bound_row_id brid
 
 
-let show_type_constraint_expr (show_type : 'a -> string) ((_, con) : 'a type_constraint_expr) =
+let show_type_constraint (show_type : 'a -> string) ((_, con) : 'a type_constraint) =
   match con with
   | ConstraintEqual(lhs, rhs) ->
       let sl = show_type lhs in
       let sr = show_type rhs in
       Printf.sprintf "%s = %s" sl sr
+  | ConstraintIdentity ->
+      "<identity>"
 
 
 let show_type_constraint_attribute ((_, attr) : type_constraint_attribute) =
@@ -421,19 +423,38 @@ let show_type_constraint_attribute ((_, attr) : type_constraint_attribute) =
 let show_type_constraint_branch (show_type : 'a -> string) ((_, branch) : 'a type_constraint_branch) =
   match branch with
   | ConstraintBranch(con, attr) ->
-      let scon = show_type_constraint_expr show_type con in
+      let scon = show_type_constraint show_type con in
       Printf.sprintf "%s -> %s" scon (show_type_constraint_attribute attr)
   | ConstraintBranchAny(attr) ->
       Printf.sprintf "_ -> %s" (show_type_constraint_attribute attr)
 
 
-let show_type_constraint (show_type : 'a -> string) ((_, Constraint(con, alts)) : 'a type_constraint) =
-  let scon = show_type_constraint_expr show_type con in
+let show_type_constraint_selection (show_type : 'a -> string) ((_, ConstraintSelection(con, alts)) : 'a type_constraint_selection) =
+  let scon = show_type_constraint show_type con in
   let salts = alts |> List.map (show_type_constraint_branch show_type) in
   if List.length salts = 0 then
     Printf.sprintf "constraint %s" scon
   else
     Printf.sprintf "constraint try %s with %s" scon (salts |> String.concat " | ")
+
+
+let show_type_substitution (dispmap : DisplayMap.t) (show_type : 'a -> string) (subst : 'a type_substitution) =
+  subst |> BoundIDMap.mapi (fun bid ty ->
+    Printf.sprintf "%s -> %s" (dispmap |> DisplayMap.find_bound_id bid) (show_type ty)
+  ) |> BoundIDMap.bindings |> List.map snd |> String.concat ", "
+
+
+let show_row_substitution (dispmap : DisplayMap.t) (show_row : 'a -> string option) (subst : 'a row_substitution) =
+  subst |> BoundRowIDMap.mapi (fun brid row ->
+    Printf.sprintf "%s -> %s" (dispmap |> DisplayMap.find_bound_row_id brid) (show_row row |> Option.value ~default:"<unknown>")
+  ) |> BoundRowIDMap.bindings |> List.map snd |> String.concat ", "
+
+
+let show_type_constraint_reference (dispmap : DisplayMap.t) (show_type : 'a -> string) (show_row : 'b -> string option) (cref : ('a, 'b) type_constraint_reference) =
+  match cref with
+  | ConstraintRef(subst, subst_row, tcid) ->
+      Printf.sprintf "(%s, %s, %s)" (show_type_substitution dispmap show_type subst) (show_row_substitution dispmap show_row subst_row) (TypeConstraintID.show tcid)
+
 
 let rec show_poly_row_by_map (dispmap : DisplayMap.t) (prow : poly_row) : string option =
   let NormalizedRow(pty_labmap, prv_opt) = TypeConv.normalize_poly_row prow in
@@ -475,38 +496,43 @@ let show_mono_type_double (ty1 : mono_type) (ty2 : mono_type) =
   (s1, s2)
 
 
-let show_mono_type_constraint_expr (con : mono_type_constraint_expr) =
-  show_type_constraint_expr show_mono_type con
-
-
-let show_mono_type_constraint_branch (branch : mono_type_constraint_branch) =
-  show_type_constraint_branch show_mono_type branch
-
-
 let show_mono_type_constraint (con : mono_type_constraint) =
   show_type_constraint show_mono_type con
 
 
-let rec show_poly_type (Poly(pty, cons) : poly_type) =
-  let dispmap = DisplayMap.empty |> collect_ids_poly (Poly(pty, [])) in
+let show_mono_type_constraint_reference (cref : mono_type_constraint_reference) =
+  let dispmap = DisplayMap.empty in
+  show_type_constraint_reference dispmap show_mono_type (show_mono_row_by_map dispmap) cref
+
+
+let rec show_poly_type (Poly(pty, cons, sels) : poly_type) =
+  let dispmap = DisplayMap.empty |> collect_ids_poly (Poly(pty, [], [])) in
   let sty = show_poly_type_body dispmap pty in
-  let scons = cons |> List.map (show_poly_type_constraint dispmap) |> String.concat " " in
-  Printf.sprintf "%s %s" sty scons
+  let scons = cons |> List.map (show_poly_type_constraint_reference dispmap) |> String.concat ", " in
+  let ssels = sels |> List.map (show_poly_type_constraint_selection dispmap) |> String.concat ", " in
+  Printf.sprintf "%s [%s] [%s]" sty scons ssels
 
 and show_poly_type_body (dispmap : DisplayMap.t) (pty : poly_type_body) =
   show_type (show_poly_row_by_map dispmap) (tvf_poly dispmap) Outmost pty
 
-and show_poly_type_constraint (dispmap : DisplayMap.t) (con : poly_type_constraint) =
-  show_type_constraint (show_poly_type_body dispmap) con
+and show_poly_type_constraint_reference (dispmap : DisplayMap.t) (cref : poly_type_constraint_reference) =
+  show_type_constraint_reference dispmap (show_poly_type_body dispmap) (show_poly_row_by_map dispmap) cref
+
+and show_poly_type_constraint_selection (dispmap : DisplayMap.t) (sel : poly_type_constraint_selection) =
+  show_type_constraint_selection (show_poly_type_body dispmap) sel 
+
+
+let show_poly_type_constraint (con : poly_type_constraint) =
+  show_type_constraint (show_poly_type_body DisplayMap.empty) con
 
 
 let show_poly_macro_parameter_type (macparamty : poly_macro_parameter_type) =
   match macparamty with
   | LateMacroParameter(pty) ->
-      show_poly_type (Poly(pty, []))
+      show_poly_type (Poly(pty, [], []))
 
   | EarlyMacroParameter(pty) ->
-      let s = show_poly_type (Poly(pty, [])) in
+      let s = show_poly_type (Poly(pty, [], [])) in
       Printf.sprintf "~(%s)" s
 
 

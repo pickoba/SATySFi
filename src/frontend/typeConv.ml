@@ -148,40 +148,57 @@ let make_row_instantiation_intern (lev : level) (brid_ht : mono_row_variable Bou
   intern_row
 
 
-let instantiate_constraint_expr intern_ty intern_row (rng, con) =
-  match con with
-  | ConstraintEqual(lhs, rhs) ->
-      let mty1 = instantiate_impl intern_ty intern_row lhs in
-      let mty2 = instantiate_impl intern_ty intern_row rhs in
-      (rng, ConstraintEqual(mty1, mty2))
+(* TED: only cause side effects to hash tables *)
+let touch_constraint_selection intern_ty intern_row (_, ConstraintSelection(con, alts)) =
+  let touch_constraint (_, con) =
+    match con with
+    | ConstraintEqual(lhs, rhs) ->
+        let _ = instantiate_impl intern_ty intern_row lhs in
+        let _ = instantiate_impl intern_ty intern_row rhs in
+        ()
+    | ConstraintIdentity -> ()
+  in
+  let touch_constraint_branch (_, branch) =
+    match branch with
+    | ConstraintBranch(con, _) -> touch_constraint con
+    | ConstraintBranchAny(_) -> ()
+  in
+  touch_constraint con;
+  alts |> List.iter touch_constraint_branch
 
 
-let instantiate_constraint_branch intern_ty intern_row (rng, branch) =
-  match branch with
-  | ConstraintBranch(con, attr) ->
-      let con = instantiate_constraint_expr intern_ty intern_row con in
-      (rng, ConstraintBranch(con, attr))
-  | ConstraintBranchAny(attr) ->
-      (rng, ConstraintBranchAny(attr))
+let instantiate_constraint_selections bid_ht brid_ht (sels : poly_type_constraint_selection list) =
+  let subst = bid_ht |> BoundIDHashTable.to_map |> BoundIDMap.map (fun mtv -> (Range.dummy "TED: TODO", TypeVariable(mtv))) in
+  let subst_row = brid_ht |> BoundRowIDHashTable.to_map |> BoundRowIDMap.map (fun mrv -> RowVar(mrv)) in
+  let (mcrefs_new, msmap) = sels |> List.fold_left (fun (crefacc, smapacc) sel ->
+    let tcid = TypeConstraintID.fresh () in
+    let cref = ConstraintRef(subst, subst_row, tcid) in
+    (Alist.extend crefacc cref, smapacc |> TypeConstraintIDMap.add tcid sel)
+  ) (Alist.empty, TypeConstraintIDMap.empty) in
+  (Alist.to_list mcrefs_new, msmap)
 
 
-let instantiate_constraint intern_ty intern_row (rng, Constraint(con, alts)) =
-  let con = instantiate_constraint_expr intern_ty intern_row con in
-  let alts = alts |> List.map (instantiate_constraint_branch intern_ty intern_row) in
-  (rng, Constraint(con, alts))
+let instantiate_constraint_reference intern_ty intern_row (cref : poly_type_constraint_reference) =
+  match cref with
+  | ConstraintRef(subst, subst_row, tcid) ->
+      let subst_new = subst |> BoundIDMap.map (instantiate_impl intern_ty intern_row) in
+      let subst_row_new = subst_row |> BoundRowIDMap.map (instantiate_row_impl intern_ty intern_row) in
+      ConstraintRef(subst_new, subst_row_new, tcid)
 
 
-let instantiate (lev : level) (qtfbl : quantifiability) ((Poly(pty, cons)) : poly_type) : mono_type * mono_type_constraint list =
+let instantiate (lev : level) (qtfbl : quantifiability) ((Poly(pty, crefs, sels)) : poly_type) : mono_type * mono_type_constraint_reference list * poly_type_constraint_selection_map =
   let bid_ht = BoundIDHashTable.create 32 in
   let brid_ht = BoundRowIDHashTable.create 32 in
   let intern_ty = make_type_instantiation_intern lev qtfbl bid_ht in
   let intern_row = make_row_instantiation_intern lev brid_ht in
   let mty = instantiate_impl intern_ty intern_row pty in
-  let mcons = cons |> List.map (instantiate_constraint intern_ty intern_row) in
-  (mty, mcons)
+  let mcrefs = crefs |> List.map (instantiate_constraint_reference intern_ty intern_row) in
+  let () = sels |> List.iter (touch_constraint_selection intern_ty intern_row) in
+  let (mcrefs_new, msmap) = instantiate_constraint_selections bid_ht brid_ht sels in
+  (mty, mcrefs @ mcrefs_new, msmap)
 
 
-let instantiate_by_map_mono (bidmap : mono_type BoundIDMap.t) (Poly(pty, _) : poly_type) : mono_type =
+let instantiate_by_map_mono (bidmap : mono_type BoundIDMap.t) (Poly(pty, _, _) : poly_type) : mono_type =
   let intern_ty (rng : Range.t) (ptv : poly_type_variable) =
     match ptv with
     | PolyFree(tvuref) ->
@@ -202,7 +219,7 @@ let instantiate_by_map_mono (bidmap : mono_type BoundIDMap.t) (Poly(pty, _) : po
   instantiate_impl intern_ty intern_row pty
 
 
-let instantiate_by_map_poly (bidmap : poly_type_body BoundIDMap.t) (Poly(pty, _) : poly_type) : poly_type =
+let instantiate_by_map_poly (bidmap : poly_type_body BoundIDMap.t) (Poly(pty, _, _) : poly_type) : poly_type =
   let intern_ty (rng : Range.t) (ptv : poly_type_variable) : poly_type_body =
     match ptv with
     | PolyFree(_) ->
@@ -218,7 +235,33 @@ let instantiate_by_map_poly (bidmap : poly_type_body BoundIDMap.t) (Poly(pty, _)
   let intern_row prv =
     RowVar(prv)
   in
-  Poly(instantiate_impl intern_ty intern_row pty, [])
+  Poly(instantiate_impl intern_ty intern_row pty, [], [])
+
+
+let instantiate_by_map_ted (bidmap : mono_type_substitution) (bridmap : mono_row_substitution) (pty : poly_type_body) : mono_type =
+  let intern_ty (rng : Range.t) (ptv : poly_type_variable) =
+    match ptv with
+    | PolyFree(tvuref) ->
+        (rng, TypeVariable(Updatable(tvuref)))
+
+    | PolyBound(bid) ->
+        begin
+          match bidmap |> BoundIDMap.find_opt bid with
+          | None     -> assert false
+          | Some(ty) -> ty
+        end
+  in
+  let intern_row (prv : poly_row_variable) =
+    match prv with
+    | PolyRowFree(rvref) -> RowVar(rvref)
+    | PolyRowBound(brid) ->
+        begin
+          match bridmap |> BoundRowIDMap.find_opt brid with
+          | None     -> assert false
+          | Some(rv) -> rv
+        end 
+  in
+  instantiate_impl intern_ty intern_row pty
 
 
 let instantiate_macro_type (lev : level) (qtfbl : quantifiability) (pmacty : poly_macro_type) : mono_macro_type =
@@ -235,74 +278,76 @@ let instantiate_macro_type (lev : level) (qtfbl : quantifiability) (pmacty : pol
   | BlockMacroType(pmacparamtys)  -> BlockMacroType(pmacparamtys |> List.map aux)
 
 
-let lift_poly_general (intern_ty : FreeID.t -> BoundID.t option) (intern_row : FreeRowID.t -> LabelSet.t -> BoundRowID.t option) (ty : mono_type) : poly_type_body =
-  let rec iter ((rng, tymain) : mono_type) =
-    match tymain with
-    | TypeVariable(tv) ->
-        begin
-          match tv with
-          | Updatable(tvuref) ->
-              begin
-                match !tvuref with
-                | MonoLink(tyl) ->
-                    iter tyl
+let rec generalize_impl (intern_ty : FreeID.t -> BoundID.t option) (intern_row : FreeRowID.t -> LabelSet.t -> BoundRowID.t option) ((rng, tymain) : mono_type) : poly_type_body =
+  let iter = generalize_impl intern_ty intern_row in
+  let iter_row = generalize_row_impl intern_ty intern_row in
+  match tymain with
+  | TypeVariable(tv) ->
+      begin
+        match tv with
+        | Updatable(tvuref) ->
+            begin
+              match !tvuref with
+              | MonoLink(tyl) ->
+                  iter tyl
 
-                | MonoFree(fid) ->
-                    let ptvi =
-                      match intern_ty fid with
-                      | None      -> PolyFree(tvuref)
-                      | Some(bid) -> PolyBound(bid)
-                    in
-                    (rng, TypeVariable(ptvi))
-              end
+              | MonoFree(fid) ->
+                  let ptvi =
+                    match intern_ty fid with
+                    | None      -> PolyFree(tvuref)
+                    | Some(bid) -> PolyBound(bid)
+                  in
+                  (rng, TypeVariable(ptvi))
+            end
 
-          | MustBeBound(mbbid) ->
-              let bid = MustBeBoundID.to_bound_id mbbid in
-              (rng, TypeVariable(PolyBound(bid)))
-        end
+        | MustBeBound(mbbid) ->
+            let bid = MustBeBoundID.to_bound_id mbbid in
+            (rng, TypeVariable(PolyBound(bid)))
+      end
 
-    | FuncType(optrow, tydom, tycod)    -> (rng, FuncType(generalize_row LabelSet.empty optrow, iter tydom, iter tycod))
-    | ProductType(tys)                  -> (rng, ProductType(TupleList.map iter tys))
-    | RecordType(row)                   -> (rng, RecordType(generalize_row LabelSet.empty row))
-    | DataType(tyargs, tyid)            -> (rng, DataType(List.map iter tyargs, tyid))
-    | ListType(tysub)                   -> (rng, ListType(iter tysub))
-    | RefType(tysub)                    -> (rng, RefType(iter tysub))
-    | BaseType(bty)                     -> (rng, BaseType(bty))
-    | InlineCommandType(tys)            -> (rng, InlineCommandType(List.map (lift_argument_type iter) tys))
-    | BlockCommandType(tys)             -> (rng, BlockCommandType(List.map (lift_argument_type iter) tys))
-    | MathCommandType(tys)              -> (rng, MathCommandType(List.map (lift_argument_type iter) tys))
-    | CodeType(tysub)                   -> (rng, CodeType(iter tysub))
+  | FuncType(optrow, tydom, tycod)    -> (rng, FuncType(iter_row LabelSet.empty optrow, iter tydom, iter tycod))
+  | ProductType(tys)                  -> (rng, ProductType(TupleList.map iter tys))
+  | RecordType(row)                   -> (rng, RecordType(iter_row LabelSet.empty row))
+  | DataType(tyargs, tyid)            -> (rng, DataType(List.map iter tyargs, tyid))
+  | ListType(tysub)                   -> (rng, ListType(iter tysub))
+  | RefType(tysub)                    -> (rng, RefType(iter tysub))
+  | BaseType(bty)                     -> (rng, BaseType(bty))
+  | InlineCommandType(tys)            -> (rng, InlineCommandType(List.map (lift_argument_type iter) tys))
+  | BlockCommandType(tys)             -> (rng, BlockCommandType(List.map (lift_argument_type iter) tys))
+  | MathCommandType(tys)              -> (rng, MathCommandType(List.map (lift_argument_type iter) tys))
+  | CodeType(tysub)                   -> (rng, CodeType(iter tysub))
 
-  and generalize_row (labset : LabelSet.t) = function
-    | RowEmpty ->
-        RowEmpty
+and generalize_row_impl (intern_ty : FreeID.t -> BoundID.t option) (intern_row : FreeRowID.t -> LabelSet.t -> BoundRowID.t option) (labset : LabelSet.t) (row : mono_row) : poly_row =
+  let iter = generalize_impl intern_ty intern_row in
+  let iter_row = generalize_row_impl intern_ty intern_row in
+  match row with
+  | RowEmpty ->
+      RowEmpty
 
-    | RowCons(rlabel, ty, tail) ->
-        let (_, label) = rlabel in
-        RowCons(rlabel, iter ty, generalize_row (labset |> LabelSet.add label) tail)
+  | RowCons(rlabel, ty, tail) ->
+      let (_, label) = rlabel in
+      RowCons(rlabel, iter ty, iter_row (labset |> LabelSet.add label) tail)
 
-    | RowVar(UpdatableRow(orviref) as rv0) ->
-        begin
-          match !orviref with
-          | MonoRowFree(frid) ->
-              begin
-                match intern_row frid labset with
-                | None ->
-                    RowVar(PolyRowFree(rv0))
+  | RowVar(UpdatableRow(orviref) as rv0) ->
+      begin
+        match !orviref with
+        | MonoRowFree(frid) ->
+            begin
+              match intern_row frid labset with
+              | None ->
+                  RowVar(PolyRowFree(rv0))
 
-                | Some(brid) ->
-                    RowVar(PolyRowBound(brid))
-              end
+              | Some(brid) ->
+                  RowVar(PolyRowBound(brid))
+            end
 
-          | MonoRowLink(row) ->
-              generalize_row labset row
-        end
+        | MonoRowLink(row) ->
+            iter_row labset row
+      end
 
-    | RowVar(MustBeBoundRow(mbbrid)) ->
-        let brid = MustBeBoundRowID.to_bound_id mbbrid in
-        RowVar(PolyRowBound(brid))
-  in
-  iter ty
+  | RowVar(MustBeBoundRow(mbbrid)) ->
+      let brid = MustBeBoundRowID.to_bound_id mbbrid in
+      RowVar(PolyRowBound(brid))
 
 
 let make_type_generalization_intern (lev : level) (tvid_ht : BoundID.t FreeIDHashTable.t) =
@@ -339,45 +384,57 @@ let make_row_generalization_intern (lev : level) (rvid_ht : BoundRowID.t FreeRow
   intern_row
 
 
-let generalize_constraint_expr intern_ty intern_row (rng, con) =
+let generalize_constraint intern_ty intern_row (rng, con) =
   match con with
   | ConstraintEqual(lhs, rhs) ->
-      let gen_lhs = lift_poly_general intern_ty intern_row lhs in
-      let gen_rhs = lift_poly_general intern_ty intern_row rhs in
+      let gen_lhs = generalize_impl intern_ty intern_row lhs in
+      let gen_rhs = generalize_impl intern_ty intern_row rhs in
       (rng, ConstraintEqual(gen_lhs, gen_rhs))
+  | ConstraintIdentity ->
+      (rng, ConstraintIdentity)
 
 
 let generalize_constraint_branch intern_ty intern_row (rng, branch) =
   match branch with
   | ConstraintBranch(con, attr) ->
-      let gen_con = generalize_constraint_expr intern_ty intern_row con in
+      let gen_con = generalize_constraint intern_ty intern_row con in
       (rng, ConstraintBranch(gen_con, attr))
   | ConstraintBranchAny(attr) ->
       (rng, ConstraintBranchAny(attr))
 
 
-let generalize_constraint intern_ty intern_row (rng, Constraint(con, alts)) =
-  let gen_con = generalize_constraint_expr intern_ty intern_row con in
+let generalize_constraint_selection intern_ty intern_row (rng, ConstraintSelection(con, alts)) =
+  let gen_con = generalize_constraint intern_ty intern_row con in
   let gen_alts = alts |> List.map (generalize_constraint_branch intern_ty intern_row) in
-  (rng, Constraint(gen_con, gen_alts))
+  (rng, ConstraintSelection(gen_con, gen_alts))
 
 
-let generalize (lev : level) (ty : mono_type) (cons : mono_type_constraint list): poly_type =
+let generalize_constraint_reference intern_ty intern_row (cref : mono_type_constraint_reference) =
+  match cref with
+  | ConstraintRef(subst, subst_row, tcid) ->
+      let subst_new = subst |> BoundIDMap.map (generalize_impl intern_ty intern_row) in
+      let subst_row_new = subst_row |> BoundRowIDMap.map (generalize_row_impl intern_ty intern_row LabelSet.empty) in
+      ConstraintRef(subst_new, subst_row_new, tcid)
+
+
+let generalize (lev : level) (ty : mono_type) (crefs : mono_type_constraint_reference list) (sels : mono_type_constraint_selection list) : poly_type =
   let tvid_ht = FreeIDHashTable.create 32 in
   let rvid_ht = FreeRowIDHashTable.create 32 in
   let intern_ty = make_type_generalization_intern lev tvid_ht in
   let intern_row = make_row_generalization_intern lev rvid_ht in
-  let gen_ty = lift_poly_general intern_ty intern_row ty in
-  let gen_cons = cons |> List.map (generalize_constraint intern_ty intern_row) in
-  Poly(gen_ty, gen_cons)
+  let gen_ty = generalize_impl intern_ty intern_row ty in
+  let gen_crefs = crefs |> List.map (generalize_constraint_reference intern_ty intern_row) in
+  let gen_sels = sels |> List.map (generalize_constraint_selection intern_ty intern_row) in
+  Poly(gen_ty, gen_crefs, gen_sels)
 
 
 let lift_poly_body =
-  lift_poly_general (fun _ -> None) (fun _ _ -> None)
+  generalize_impl (fun _ -> None) (fun _ _ -> None)
 
 
+(* TED: TODO: consider constraint references *)
 let lift_poly (ty : mono_type) : poly_type =
-  Poly(lift_poly_body ty, [])
+  Poly(lift_poly_body ty, [], [])
 
 
 let generalize_macro_type (macty : mono_macro_type) : poly_macro_type =
@@ -386,8 +443,8 @@ let generalize_macro_type (macty : mono_macro_type) : poly_macro_type =
   let intern_ty = make_type_generalization_intern Level.bottom tvid_ht in
   let intern_row = make_row_generalization_intern Level.bottom rvid_ht in
   let aux = function
-    | LateMacroParameter(ty)  -> LateMacroParameter(lift_poly_general intern_ty intern_row ty)
-    | EarlyMacroParameter(ty) -> EarlyMacroParameter(lift_poly_general intern_ty intern_row ty)
+    | LateMacroParameter(ty)  -> LateMacroParameter(generalize_impl intern_ty intern_row ty)
+    | EarlyMacroParameter(ty) -> EarlyMacroParameter(generalize_impl intern_ty intern_row ty)
   in
   match macty with
   | InlineMacroType(macparamtys) -> InlineMacroType(macparamtys |> List.map aux)
@@ -449,11 +506,11 @@ let make_opaque_type_scheme (arity : int) (tyid : TypeID.t) : type_scheme =
   let rng = Range.dummy "add_variant_types" in
   let bids = List.init arity (fun _ -> BoundID.fresh ()) in
   let ptys = bids |> List.map (fun bid -> (rng, TypeVariable(PolyBound(bid)))) in
-  (bids, Poly((rng, DataType(ptys, tyid)), []))
+  (bids, Poly((rng, DataType(ptys, tyid)), [], []))
 
 
 let get_opaque_type (tyscheme : type_scheme) : TypeID.t option =
-  let (bids, Poly(pty_body, _)) = tyscheme in
+  let (bids, Poly(pty_body, _, _)) = tyscheme in
   match pty_body with
   | (_, DataType(ptys, tyid)) ->
       begin
@@ -487,7 +544,7 @@ let kind_equal (kd1 : kind) (kd2 : kind) : bool =
 
 
 (* TED: TODO: constraints should be checked (might be better to use [apply_constraints_poly]) *)
-let rec poly_type_equal (Poly(pty1, _) : poly_type) (Poly(pty2, _) : poly_type) : bool =
+let rec poly_type_equal (Poly(pty1, _, _) : poly_type) (Poly(pty2, _, _) : poly_type) : bool =
   let rec aux (pty1 : poly_type_body) (pty2 : poly_type_body) =
     let (_, ptymain1) = pty1 in
     let (_, ptymain2) = pty2 in
@@ -578,7 +635,7 @@ and normalized_poly_row_equal (nomrow1 : normalized_poly_row) (nomrow2 : normali
     LabelMap.merge (fun _ ptyopt1 ptyopt2 ->
       match (ptyopt1, ptyopt2) with
       | (None, None)             -> None
-      | (Some(pty1), Some(pty2)) -> Some(poly_type_equal (Poly(pty1, [])) (Poly(pty2, [])))
+      | (Some(pty1), Some(pty2)) -> Some(poly_type_equal (Poly(pty1, [], [])) (Poly(pty2, [], [])))
       | _                        -> Some(false)
     ) plabmap1 plabmap2 |> LabelMap.for_all (fun _label b -> b)
   in

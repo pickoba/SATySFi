@@ -197,7 +197,7 @@ let add_synonym_types (syndefs : (type_name * type_scheme) list) (tyenv : Typeen
   ) tyenv syndefs
 
 
-let no_parameter = ([], Poly(tU, []))
+let no_parameter = ([], Poly(tU, [], []))
 
 
 let add_general_default_types (tyenvmid : Typeenv.t) : Typeenv.t =
@@ -208,11 +208,11 @@ let add_general_default_types (tyenvmid : Typeenv.t) : Typeenv.t =
   tyenvmid
     |> add_variant_types [
       ("option", vid_option, 1, [
-        ("None", ([bid], Poly(tU, [])));
-        ("Some", ([bid], Poly(typaram, [])))
+        ("None", ([bid], Poly(tU, [], [])));
+        ("Some", ([bid], Poly(typaram, [], [])))
       ]);
       ("itemize", vid_itemize, 0, [
-        ("Item", ([], Poly(tPROD [tIT; tL (tITMZ ())], [])))
+        ("Item", ([], Poly(tPROD [tIT; tL (tITMZ ())], [], [])))
       ]);
       ("math-class", vid_mathcls, 0, [
         ("MathOrd"   , no_parameter);
@@ -248,9 +248,9 @@ let add_pdf_mode_default_types (tyenvmid : Typeenv.t) : Typeenv.t =
   tyenvmid
     |> add_variant_types [
       ("color", vid_color, 0, [
-        ("Gray", ([], Poly(tFL, [])));
-        ("RGB" , ([], Poly(tPROD [tFL; tFL; tFL], [])));
-        ("CMYK", ([], Poly(tPROD [tFL; tFL; tFL; tFL], [])));
+        ("Gray", ([], Poly(tFL, [], [])));
+        ("RGB" , ([], Poly(tPROD [tFL; tFL; tFL], [], [])));
+        ("CMYK", ([], Poly(tPROD [tFL; tFL; tFL; tFL], [], [])));
       ]);
       ("script", vid_script, 0, [
         ("HanIdeographic", no_parameter);
@@ -265,15 +265,15 @@ let add_pdf_mode_default_types (tyenvmid : Typeenv.t) : Typeenv.t =
       ]);
 
       ("cell", vid_cell, 0, [
-        ("NormalCell", ([], Poly(tPROD [tPADS; tIB], [])));
+        ("NormalCell", ([], Poly(tPROD [tPADS; tIB], [], [])));
         ("EmptyCell" , no_parameter);
-        ("MultiCell" , ([], Poly(tPROD [tI; tI; tPADS; tIB], [])));
+        ("MultiCell" , ([], Poly(tPROD [tI; tI; tPADS; tIB], [], [])));
       ]);
     ]
     |> add_synonym_types [
-      ("deco",            ([], Poly(tDECO, [])));
-      ("deco-set",        ([], Poly(tDECOSET, [])));
-      ("inline-graphics", ([], Poly(tIGR, [])));
+      ("deco",            ([], Poly(tDECO, [], [])));
+      ("deco-set",        ([], Poly(tDECOSET, [], [])));
+      ("inline-graphics", ([], Poly(tIGR, [], [])));
     ]
 
 
@@ -684,7 +684,7 @@ let get_pdf_mode_initial_context wid =
     }
 
 
-let (~%) ty = Poly(ty, [])
+let (~%) ty = Poly(ty, [], [])
 let (~@) n = (~! "tv", TypeVariable(n))
 
 

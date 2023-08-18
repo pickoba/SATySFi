@@ -152,6 +152,16 @@ module StructSig : sig
     s:(signature_name -> signature abstracted -> signature abstracted) ->
     t -> t
 
+  val mapM :
+    v:(var_name -> value_entry -> (value_entry, 'a) result) ->
+    a:(macro_name -> macro_entry -> (macro_entry, 'a) result) ->
+    c:(constructor_name -> constructor_entry -> (constructor_entry, 'a) result) ->
+    f:(type_name -> poly_type -> (poly_type, 'a) result) ->
+    t:(type_name -> type_entry -> (type_entry, 'a) result) ->
+    m:(module_name -> module_entry -> (module_entry, 'a) result) ->
+    s:(signature_name -> signature abstracted -> (signature abstracted, 'a) result) ->
+    t -> (t, 'a) result
+
   val union : t -> t -> (t, string) result
 
 end

@@ -377,6 +377,43 @@ module StructSig = struct
     ssig
 
 
+  let mapM ~v:fv ~a:fa ~c:fc ~f:ff ~t:ft ~m:fm ~s:fs (ssig : t) : (t, 'a) result =
+    let open ResultMonad in
+    let* ssig =
+      ssig |> Alist.to_list |> mapM (fun entry ->
+        match entry with
+        | SSValue(x, ventry) ->
+            let* ventry = fv x ventry in
+            return @@ SSValue(x, ventry)
+
+        | SSMacro(csnm, macentry) ->
+            let* macentry = fa csnm macentry in
+            return @@ SSMacro(csnm, macentry)
+
+        | SSConstructor(ctornm, centry) ->
+            let* centry = fc ctornm centry in
+            return @@ SSConstructor(ctornm, centry)
+
+        | SSFold(tynm, pty) ->
+            let* pty = ff tynm pty in
+            return @@ SSFold(tynm, pty)
+
+        | SSType(tynm, tentry) ->
+            let* tentry = ft tynm tentry in
+            return @@ SSType(tynm, tentry)
+
+        | SSModule(modnm, mentry) ->
+            let* mentry = fm modnm mentry in
+            return @@ SSModule(modnm, mentry)
+
+        | SSSignature(signm, absmodsig) ->
+            let* absmodsig = fs signm absmodsig in
+            return @@ SSSignature(signm, absmodsig)
+      )
+    in
+    return @@ Alist.of_list ssig
+
+
   exception Conflict of string
 
 

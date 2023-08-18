@@ -43,7 +43,7 @@ type type_error =
   | IllegalNumberOfTypeArguments         of Range.t * type_name * int * int
   | TypeUnificationError                 of mono_type * mono_type * unification_error
   | RowUnificationError                  of Range.t * mono_row * mono_row * unification_error
-  | ConstraintError                      of type_constraint_attribute option * type_error
+  | ConstraintError                      of type_constraint_attribute list * type_error
   | TypeParameterBoundMoreThanOnce       of Range.t * type_variable_name
   | ConflictInSignature                  of Range.t * string
   | NotAStructureSignature               of Range.t * functor_signature

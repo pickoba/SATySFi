@@ -75,34 +75,92 @@ type level = Level.t
 
 module StoreIDHashTable = Hashtbl.Make(StoreID)
 
+module BoundIDMap = struct
+  
+  include Map.Make(BoundID)
+
+  let pp pp_v fmt values =
+    iter (fun k v ->
+      Format.fprintf fmt "%a: %a" BoundID.pp k pp_v v
+    ) values
+
+end
+
+module BoundRowIDMap = struct
+
+  include Map.Make(BoundRowID)
+
+  let pp pp_v fmt values =
+    iter (fun k v ->
+      Format.fprintf fmt "%a: %a" BoundRowID.pp k pp_v v
+    ) values
+
+end
+
 module EvalVarIDMap = Map.Make(EvalVarID)
+
+module TypeConstraintIDMap = struct
+
+  include Map.Make(TypeConstraintID)
+
+  let merge m1 m2 =
+    let f _ x y = match x, y with
+      | Some _, Some _ -> assert false 
+      | Some x, None   -> Some x
+      | None,   Some y -> Some y
+      | None,   None   -> None
+    in
+    merge f m1 m2
+
+  let merge_all ms =
+    List.fold_left merge empty ms
+
+  let pp pp_v fmt values =
+    iter (fun k v ->
+      Format.fprintf fmt "%a: %a" TypeConstraintID.pp k pp_v v
+    ) values
+
+end
 
 module OpaqueIDSet = Set.Make(TypeID)
 
-type 'a type_constraint =
-  'a type_constraint_main ranged
+type 'a type_constraint_selection =
+  'a type_constraint_selection_main ranged
 
-and 'a type_constraint_main =
-  | Constraint of 'a type_constraint_expr * 'a type_constraint_branch list
+and 'a type_constraint_selection_main =
+  | ConstraintSelection of 'a type_constraint * 'a type_constraint_branch list
 
 and 'a type_constraint_branch =
   'a type_constraint_branch_main ranged
 
 and 'a type_constraint_branch_main =
-  | ConstraintBranch of 'a type_constraint_expr * type_constraint_attribute
+  | ConstraintBranch of 'a type_constraint * type_constraint_attribute
   | ConstraintBranchAny of type_constraint_attribute
 
-and 'a type_constraint_expr =
-  'a type_constraint_expr_main ranged
+and 'a type_constraint =
+  'a type_constraint_main ranged
 
-and 'a type_constraint_expr_main =
+and 'a type_constraint_main =
   | ConstraintEqual of 'a * 'a
+  | ConstraintIdentity (* always satisfied *)
 
 and type_constraint_attribute =
   type_constraint_attribute_main ranged
 
 and type_constraint_attribute_main =
   | ConstraintAttribute of string
+[@@deriving show]
+
+type 'a type_substitution =
+  'a BoundIDMap.t
+[@@deriving show]
+
+type 'a row_substitution =
+  'a BoundRowIDMap.t
+[@@deriving show]
+
+type ('a, 'b) type_constraint_reference =
+	| ConstraintRef of 'a type_substitution * 'b row_substitution * TypeConstraintID.t
 [@@deriving show]
 
 type manual_type =
@@ -134,16 +192,16 @@ type manual_kind =
   | MKind of manual_base_kind list * manual_base_kind
 [@@deriving show]
 
-type manual_constraint =
-  manual_type type_constraint
+type manual_constraint_selection =
+  manual_type type_constraint_selection
 [@@deriving show]
 
 type manual_constraint_branch =
   manual_type type_constraint_branch
 [@@deriving show]
 
-type manual_constraint_expr =
-  manual_type type_constraint_expr
+type manual_constraint =
+  manual_type type_constraint
 [@@deriving show]
 
 type base_type =
@@ -288,11 +346,11 @@ and poly_type_variable =
   | PolyFree  of mono_type_variable_updatable ref
   | PolyBound of BoundID.t
 
-and mono_type_constraint =
-  mono_type type_constraint
+and mono_type_constraint_selection =
+  mono_type type_constraint_selection
 
-and poly_type_constraint =
-  poly_type_body type_constraint
+and poly_type_constraint_selection =
+  poly_type_body type_constraint_selection
 
 and mono_type_constraint_branch =
   mono_type type_constraint_branch
@@ -300,11 +358,23 @@ and mono_type_constraint_branch =
 and poly_type_constraint_branch =
   poly_type_body type_constraint_branch
 
-and mono_type_constraint_expr =
-  mono_type type_constraint_expr
+and mono_type_constraint =
+  mono_type type_constraint
 
-and poly_type_constraint_expr =
-  poly_type_body type_constraint_expr
+and poly_type_constraint =
+  poly_type_body type_constraint
+
+and mono_type_substitution =
+  mono_type type_substitution 
+
+and poly_type_substitution =
+  poly_type_body type_substitution
+
+and mono_type_constraint_reference =
+  (mono_type, mono_row) type_constraint_reference
+
+and poly_type_constraint_reference =
+  (poly_type_body, poly_row) type_constraint_reference
 
 and mono_type =
   (mono_type_variable, mono_row_variable) typ
@@ -313,14 +383,20 @@ and poly_type_body =
   (poly_type_variable, poly_row_variable) typ
 
 and poly_type =
-  | Poly of poly_type_body * poly_type_constraint list
+  | Poly of poly_type_body * poly_type_constraint_reference list * poly_type_constraint_selection list
 
 and mono_row =
   (mono_type_variable, mono_row_variable) row
-[@@deriving show { with_path = false }]
 
-type poly_row =
+and poly_row =
   (poly_type_variable, poly_row_variable) row
+
+and mono_row_substitution =
+  mono_row row_substitution
+
+and poly_row_substitution =
+  poly_row row_substitution
+[@@deriving show { with_path = false }]
 
 type ('a, 'b, 'c) normalized_row =
   | NormalizedRow of (('a, 'b) typ) LabelMap.t * 'c option
@@ -369,6 +445,8 @@ type poly_macro_type =
 
 type constructor_branch_map = poly_type ConstructorMap.t
 
+type poly_type_constraint_selection_map = poly_type_constraint_selection TypeConstraintIDMap.t
+[@@deriving show { with_path = false }]
 
 let pp_sep fmt () =
   Format.fprintf fmt ";@ "
@@ -449,7 +527,7 @@ and untyped_declaration =
     (* TODO; should be `untyped_declaration_main ranged`  *)
 
 and untyped_declaration_main =
-  | UTDeclValue      of stage * var_name ranged * manual_quantifier * manual_type * manual_constraint list
+  | UTDeclValue      of stage * var_name ranged * manual_quantifier * manual_type * manual_constraint_selection list
   | UTDeclTypeOpaque of type_name ranged * manual_kind
   | UTDeclModule     of module_name ranged * untyped_signature
   | UTDeclSignature  of signature_name ranged * untyped_signature
@@ -1341,17 +1419,27 @@ let map_cycle f = function
 
 module GlobalTypeenv = Map.Make(String)
 
-module BoundIDHashTable = Hashtbl.Make(BoundID)
+module BoundIDHashTable = struct
 
-module BoundRowIDHashTable = Hashtbl.Make(BoundRowID)
+  include Hashtbl.Make(BoundID)
+
+  let to_map tbl =
+    fold (fun k v m -> BoundIDMap.add k v m) tbl BoundIDMap.empty
+
+end
+
+module BoundRowIDHashTable = struct
+  
+  include Hashtbl.Make(BoundRowID)
+
+  let to_map tbl =
+    fold (fun k v m -> BoundRowIDMap.add k v m) tbl BoundRowIDMap.empty
+
+end
 
 module FreeIDHashTable = Hashtbl.Make(FreeID)
 
 module FreeRowIDHashTable = Hashtbl.Make(FreeRowID)
-
-module BoundIDMap = Map.Make(BoundID)
-
-module BoundRowIDMap = Map.Make(BoundRowID)
 
 module FreeIDMap = Map.Make(FreeID)
 

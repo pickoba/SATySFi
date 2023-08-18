@@ -51,7 +51,7 @@ let add_dependency_to_type_environment ~(package_only : bool) (header : header_e
   ) tyenv
 
 
-let typecheck_library_file ~for_struct:(tyenv_for_struct : Typeenv.t) ~for_sig:(tyenv_for_sig : Typeenv.t) (abspath_in : abs_path) (utsig_opt : untyped_signature option) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list * mono_type_constraint list) ok =
+let typecheck_library_file ~for_struct:(tyenv_for_struct : Typeenv.t) ~for_sig:(tyenv_for_sig : Typeenv.t) (abspath_in : abs_path) (utsig_opt : untyped_signature option) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list) ok =
   let open ResultMonad in
   let res =
     Logging.begin_to_typecheck_file abspath_in;
@@ -63,19 +63,19 @@ let typecheck_library_file ~for_struct:(tyenv_for_struct : Typeenv.t) ~for_sig:(
   res |> Result.map_error (fun tyerr -> TypeError(tyerr))
 
 
-let typecheck_document_file (tyenv : Typeenv.t) (abspath_in : abs_path) (utast : untyped_abstract_tree) : (abstract_tree * mono_type_constraint list) ok =
+let typecheck_document_file (tyenv : Typeenv.t) (abspath_in : abs_path) (utast : untyped_abstract_tree) : (abstract_tree * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   Logging.begin_to_typecheck_file abspath_in;
-  let* (ty, ast, cons) = Typechecker.main Stage1 tyenv utast |> Result.map_error (fun tyerr -> TypeError(tyerr)) in
+  let* (ty, ast, crefs, smap) = Typechecker.main Stage1 tyenv utast |> Result.map_error (fun tyerr -> TypeError(tyerr)) in
   Logging.pass_type_check (Some(Display.show_mono_type ty));
   if OptionState.is_text_mode () then
     if Typechecker.are_unifiable ty (Range.dummy "text-mode", BaseType(StringType)) then
-      return (ast, cons)
+      return (ast, crefs, smap)
     else
       err (NotAStringFile(abspath_in, ty))
   else
     if Typechecker.are_unifiable ty (Range.dummy "pdf-mode", BaseType(DocumentType)) then
-      return (ast, cons)
+      return (ast, crefs, smap)
     else
       err (NotADocumentFile(abspath_in, ty))
 
@@ -87,30 +87,30 @@ let check_library_package (tyenv_prim : Typeenv.t) (genv : global_type_environme
   let* sorted_utlibs = ClosedFileDependencyResolver.main utlibs in
 
   (* Typecheck each source file: *)
-  let* (_genv, libacc, ssig_opt, consacc) =
-    sorted_utlibs |> foldM (fun (genv, libacc, ssig_opt, consacc) (abspath, utlib) ->
+  let* (_genv, libacc, ssig_opt) =
+    sorted_utlibs |> foldM (fun (genv, libacc, ssig_opt) (abspath, utlib) ->
       let (_attrs, header, (modident, utsig_opt, utbinds)) = utlib in
       let* tyenv_for_struct = tyenv_prim |> add_dependency_to_type_environment ~package_only:false header genv in
       let (_, modnm) = modident in
       if String.equal modnm main_module_name then
-        let* ((_quant, ssig), binds, cons) =
+        let* ((_quant, ssig), binds) =
           let* tyenv_for_sig = tyenv_prim |> add_dependency_to_type_environment ~package_only:true header genv in
           typecheck_library_file ~for_struct:tyenv_for_struct ~for_sig:tyenv_for_sig abspath utsig_opt utbinds
         in
         let genv = genv |> GlobalTypeenv.add modnm ssig in
-        return (genv, Alist.extend libacc (abspath, binds), Some(ssig), consacc @ cons)
+        return (genv, Alist.extend libacc (abspath, binds), Some(ssig))
       else
-        let* ((_quant, ssig), binds, cons) =
+        let* ((_quant, ssig), binds) =
           typecheck_library_file ~for_struct:tyenv_for_struct ~for_sig:tyenv_for_struct abspath utsig_opt utbinds
         in
         let genv = genv |> GlobalTypeenv.add modnm ssig in
-        return (genv, Alist.extend libacc (abspath, binds), ssig_opt, consacc @ cons)
-    ) (genv, Alist.empty, None, [])
+        return (genv, Alist.extend libacc (abspath, binds), ssig_opt)
+    ) (genv, Alist.empty, None)
   in
   let libs = Alist.to_list libacc in
 
   match ssig_opt with
-  | Some(ssig) -> return (ssig, libs, consacc)
+  | Some(ssig) -> return (ssig, libs)
   | None       -> err @@ NoMainModule(main_module_name)
 
 
@@ -134,7 +134,7 @@ let check_font_package (_main_module_name : module_name) (font_files : font_file
             {
               val_name  = Some(evid);
               (* TED: Font type does not generate constraints. *)
-              val_type  = Poly((Range.dummy "font-package 2", BaseType(FontType)), []);
+              val_type  = Poly((Range.dummy "font-package 2", BaseType(FontType)), [], []);
               val_stage = stage;
             }
           in
@@ -149,7 +149,7 @@ let check_font_package (_main_module_name : module_name) (font_files : font_file
                 {
                   val_name  = Some(evid);
                   (* TED: Font type does not generate constraints. *)
-                  val_type  = Poly((Range.dummy "font-package 4", BaseType(FontType)), []);
+                  val_type  = Poly((Range.dummy "font-package 4", BaseType(FontType)), [], []);
                   val_stage = stage;
                 }
               in
@@ -160,10 +160,10 @@ let check_font_package (_main_module_name : module_name) (font_files : font_file
 
     ) (StructSig.empty, Alist.empty)
   in
-  return (ssig, Alist.to_list libacc, [])
+  return (ssig, Alist.to_list libacc)
 
 
-let main (tyenv_prim : Typeenv.t) (genv : global_type_environment) (package : untyped_package) : (StructSig.t * (abs_path * binding list) list * mono_type_constraint list) ok =
+let main (tyenv_prim : Typeenv.t) (genv : global_type_environment) (package : untyped_package) : (StructSig.t * (abs_path * binding list) list) ok =
   match package with
   | UTLibraryPackage{ main_module_name; modules = utlibs } ->
       check_library_package tyenv_prim genv main_module_name utlibs
@@ -172,27 +172,27 @@ let main (tyenv_prim : Typeenv.t) (genv : global_type_environment) (package : un
       check_font_package main_module_name font_files
 
 
-let main_document (tyenv_prim : Typeenv.t) (genv : global_type_environment) (sorted_locals : (abs_path * untyped_library_file) list) (abspath_and_utdoc : abs_path * untyped_document_file) : ((abs_path * binding list) list * abstract_tree * mono_type_constraint list) ok =
+let main_document (tyenv_prim : Typeenv.t) (genv : global_type_environment) (sorted_locals : (abs_path * untyped_library_file) list) (abspath_and_utdoc : abs_path * untyped_document_file) : ((abs_path * binding list) list * abstract_tree * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
-  let* (genv, libacc, consacc) =
-    sorted_locals |> foldM (fun (genv, libacc, consacc) (abspath, utlib) ->
+  let* (genv, libacc) =
+    sorted_locals |> foldM (fun (genv, libacc) (abspath, utlib) ->
       let (_attrs, header, (modident, utsig_opt, utbinds)) = utlib in
       let (_, modnm) = modident in
-      let* ((_quant, ssig), binds, cons) =
+      let* ((_quant, ssig), binds) =
         let* tyenv = tyenv_prim |> add_dependency_to_type_environment ~package_only:false header genv in
         typecheck_library_file ~for_struct:tyenv ~for_sig:tyenv abspath utsig_opt utbinds
       in
       let genv = genv |> GlobalTypeenv.add modnm ssig in
-      return (genv, Alist.extend libacc (abspath, binds), consacc @ cons)
-    ) (genv, Alist.empty, [])
+      return (genv, Alist.extend libacc (abspath, binds))
+    ) (genv, Alist.empty)
   in
   let libs = Alist.to_list libacc in
 
   (* Typecheck the document: *)
-  let* (ast_doc, cons_doc) =
+  let* (ast_doc, crefs_doc, smap_doc) =
     let (abspath, (_attrs, header, utast)) = abspath_and_utdoc in
     let* tyenv = tyenv_prim |> add_dependency_to_type_environment ~package_only:false header genv in
     typecheck_document_file tyenv abspath utast
   in
 
-  return (libs, ast_doc, consacc @ cons_doc)
+  return (libs, ast_doc, crefs_doc, smap_doc)
