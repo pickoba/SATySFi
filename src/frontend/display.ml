@@ -509,12 +509,12 @@ let show_mono_type_constraint_reference (cref : mono_type_constraint_reference) 
   show_type_constraint_reference dispmap show_mono_type (show_mono_row_by_map dispmap) cref
 
 
-let rec show_poly_type (Poly(pty, cons, sels) : poly_type) =
+let rec show_poly_type (Poly(pty, crefs, sels) : poly_type) =
   let dispmap = DisplayMap.empty |> collect_ids_poly (Poly(pty, [], [])) in
   let sty = show_poly_type_body dispmap pty in
-  let scons = cons |> List.map (show_poly_type_constraint_reference dispmap) |> String.concat ", " in
+  let screfs = crefs |> List.map (show_poly_type_constraint_reference dispmap) |> String.concat ", " in
   let ssels = sels |> List.map (show_poly_type_constraint_selection dispmap) |> String.concat ", " in
-  Printf.sprintf "%s [%s] [%s]" sty scons ssels
+  Printf.sprintf "%s [%s] [%s]" sty screfs ssels
 
 and show_poly_type_body (dispmap : DisplayMap.t) (pty : poly_type_body) =
   show_type (show_poly_row_by_map dispmap) (tvf_poly dispmap) Outmost pty

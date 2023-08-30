@@ -123,7 +123,7 @@ and substitute_concrete (subst : substitution) (modsig : signature) : signature 
       ConcStructure(ssig)
 
 
-and substitute_poly_type (subst : substitution) (Poly(pty, cons, smap) : poly_type) : poly_type =
+and substitute_poly_type (subst : substitution) (Poly(pty, crefs, sels) : poly_type) : poly_type =
   let rec aux (rng, ptymain) =
     let ptymain =
       match ptymain with
@@ -200,7 +200,7 @@ and substitute_poly_type (subst : substitution) (Poly(pty, cons, smap) : poly_ty
     | (rng, ConstraintIdentity) -> (rng, ConstraintIdentity)
   in
 
-  Poly(aux pty, cons |> List.map aux_constraint_reference, smap |> List.map aux_constraint_selection)
+  Poly(aux pty, crefs |> List.map aux_constraint_reference, sels |> List.map aux_constraint_selection)
 
 
 and substitute_type_id (subst : substitution) (tyid_from : TypeID.t) : TypeID.t =
@@ -491,8 +491,8 @@ and subtype_poly_type_impl (internbid : type_intern) (internbrid : row_intern) (
   in
   (* TED: TODO: Is this level correct? *)
   match (
-    TypeConstraint.apply_constraints_poly Level.bottom Quantifiable TypeConstraintIDMap.empty pty1,
-    TypeConstraint.apply_constraints_poly Level.bottom Quantifiable TypeConstraintIDMap.empty pty2
+    TypeConstraint.apply_constraints_poly Level.bottom Quantifiable pty1,
+    TypeConstraint.apply_constraints_poly Level.bottom Quantifiable pty2
   ) with
   | (Ok(Poly(pty1, [], [])), Ok(Poly(pty2, [], []))) -> aux pty1 pty2
   | (Ok(pty1), Ok(pty2)) ->

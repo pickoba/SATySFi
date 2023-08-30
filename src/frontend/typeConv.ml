@@ -170,12 +170,13 @@ let touch_constraint_selection intern_ty intern_row (_, ConstraintSelection(con,
 let instantiate_constraint_selections bid_ht brid_ht (sels : poly_type_constraint_selection list) =
   let subst = bid_ht |> BoundIDHashTable.to_map |> BoundIDMap.map (fun mtv -> (Range.dummy "TED: TODO", TypeVariable(mtv))) in
   let subst_row = brid_ht |> BoundRowIDHashTable.to_map |> BoundRowIDMap.map (fun mrv -> RowVar(mrv)) in
-  let (mcrefs_new, msmap) = sels |> List.fold_left (fun (crefacc, smapacc) sel ->
-    let tcid = TypeConstraintID.fresh () in
-    let cref = ConstraintRef(subst, subst_row, tcid) in
-    (Alist.extend crefacc cref, smapacc |> TypeConstraintIDMap.add tcid sel)
-  ) (Alist.empty, TypeConstraintIDMap.empty) in
-  (Alist.to_list mcrefs_new, msmap)
+  let (mcrefs_new, mcids) = sels |> List.fold_left (fun (crefsacc, cidsacc) sel ->
+    let cid = TypeConstraintID.fresh () in
+    let cref = ConstraintRef(subst, subst_row, cid) in
+    let () = TypeConstraintSelectionMap.add cid sel in
+    (Alist.extend crefsacc cref, Alist.extend cidsacc cid)
+  ) (Alist.empty, Alist.empty) in
+  (Alist.to_list mcrefs_new, Alist.to_list mcids)
 
 
 let instantiate_constraint_reference intern_ty intern_row (cref : poly_type_constraint_reference) =
@@ -190,7 +191,7 @@ let instantiate_constraint_reference intern_ty intern_row (cref : poly_type_cons
   aux cref
 
 
-let instantiate (lev : level) (qtfbl : quantifiability) ((Poly(pty, crefs, sels)) : poly_type) : mono_type * mono_type_constraint_reference list * poly_type_constraint_selection_map =
+let instantiate (lev : level) (qtfbl : quantifiability) ((Poly(pty, crefs, sels)) : poly_type) : mono_type * mono_type_constraint_reference list * TypeConstraintID.t list =
   let bid_ht = BoundIDHashTable.create 32 in
   let brid_ht = BoundRowIDHashTable.create 32 in
   let intern_ty = make_type_instantiation_intern lev qtfbl bid_ht in
@@ -198,8 +199,8 @@ let instantiate (lev : level) (qtfbl : quantifiability) ((Poly(pty, crefs, sels)
   let mty = instantiate_impl intern_ty intern_row pty in
   let mcrefs = crefs |> List.map (instantiate_constraint_reference intern_ty intern_row) in
   let () = sels |> List.iter (touch_constraint_selection intern_ty intern_row) in
-  let (mcrefs_new, msmap) = instantiate_constraint_selections bid_ht brid_ht sels in
-  (mty, mcrefs @ mcrefs_new, msmap)
+  let (mcrefs_new, mcids) = instantiate_constraint_selections bid_ht brid_ht sels in
+  (mty, mcrefs @ mcrefs_new, mcids)
 
 
 let instantiate_by_map_mono (bidmap : mono_type BoundIDMap.t) (Poly(pty, _, _) : poly_type) : mono_type =

@@ -1574,14 +1574,14 @@ let check_depended_packages ~(use_test_only_lock : bool) ~(library_root : abs_pa
   in
 
   (* Typecheck every locked package: *)
-  let (genv, configenv, libacc, crefsacc, smapacc) =
-    sorted_packages |> List.fold_left (fun (genv, configenv, libacc, crefsacc, smapacc) (_lock_name, (config, package)) ->
+  let (genv, configenv, libacc, crefsacc, cidsacc) =
+    sorted_packages |> List.fold_left (fun (genv, configenv, libacc, crefsacc, cidsacc) (_lock_name, (config, package)) ->
       let main_module_name =
         match package with
         | UTLibraryPackage{ main_module_name; _ } -> main_module_name
         | UTFontPackage{ main_module_name; _ }    -> main_module_name
       in
-      let (ssig, libs, crefs, smap) =
+      let (ssig, libs, crefs, cids) =
         match PackageChecker.main tyenv_prim genv package with
         | Ok(pair) -> pair
         | Error(e) -> raise (ConfigError(e))
@@ -1589,10 +1589,10 @@ let check_depended_packages ~(use_test_only_lock : bool) ~(library_root : abs_pa
       let genv = genv |> GlobalTypeenv.add main_module_name ssig in
       let configenv = configenv |> GlobalTypeenv.add main_module_name config in
       let libacc = Alist.append libacc libs in
-      (genv, configenv, libacc, crefsacc @ crefs, TypeConstraintIDMap.merge smapacc smap)
-    ) (GlobalTypeenv.empty, GlobalTypeenv.empty, Alist.empty, [], TypeConstraintIDMap.empty)
+      (genv, configenv, libacc, crefsacc @ crefs, cidsacc @ cids)
+    ) (GlobalTypeenv.empty, GlobalTypeenv.empty, Alist.empty, [], [])
   in
-  (genv, configenv, Alist.to_list libacc, crefsacc, smapacc)
+  (genv, configenv, Alist.to_list libacc, crefsacc, cidsacc)
 
 
 let make_package_lock_config_path (abspathstr_in : string) =
@@ -1711,14 +1711,14 @@ let build
 
         let (_config, package) = load_package ~use_test_files:false ~extensions abspath_in in
 
-        (* TED: TODO: check crefs and smap *)
-        let (genv, _configenv, _libs_dep, _crefs_dep, _smap_dep) =
+        (* TED: TODO: check crefs and cids *)
+        let (genv, _configenv, _libs_dep, _crefs_dep, _cids_dep) =
           check_depended_packages ~use_test_only_lock:false ~library_root ~extensions tyenv_prim lock_config
         in
 
         begin
           match PackageChecker.main tyenv_prim genv package with
-          | Ok((_ssig, _libs, _crefs, _smap)) -> ()
+          | Ok((_ssig, _libs, _crefs, _cids)) -> ()
           | Error(e)                          -> raise (ConfigError(e))
         end
 
@@ -1736,7 +1736,7 @@ let build
         let dump_file_exists = CrossRef.initialize abspath_dump in
         Logging.dump_file ~already_exists:dump_file_exists abspath_dump;
 
-        let (genv, configenv, libs, crefs_dep, smap_dep) =
+        let (genv, configenv, libs, crefs_dep, cids_dep) =
           check_depended_packages ~use_test_only_lock:false ~library_root ~extensions tyenv_prim lock_config
         in
 
@@ -1748,20 +1748,20 @@ let build
         in
 
         (* Typechecking and elaboration: *)
-        let (libs_local, ast_doc, cref_doc, smap_doc) =
+        let (libs_local, ast_doc, cref_doc, cids_doc) =
           match PackageChecker.main_document tyenv_prim genv sorted_locals (abspath_in, utdoc) with
           | Ok(pair) -> pair
           | Error(e) -> raise (ConfigError(e))
         in
         let libs = List.append libs libs_local in
         let crefs = crefs_dep @ cref_doc in
-        let smap = TypeConstraintIDMap.merge smap_dep smap_doc in
+        let cids = cids_dep @ cids_doc in
         (* TED: JUST FOR DEBUG START *)
         let () =
           Printf.printf " ---- ---- (main) ---- ----\n";
           Printf.printf "%d constraint reference(s) found\n" (List.length crefs);
           crefs |> List.iter (fun cref -> Printf.printf "%s\n" (Display.show_mono_type_constraint_reference cref));
-          Printf.printf "constraint selection map size: %d\n" (TypeConstraintIDMap.cardinal smap);
+          Printf.printf "%d constraint id(s) found\n" (List.length cids);
           Printf.printf " ---- ---- ------ ---- ----\n"
         in
         (* TED: JUST FOR DEBUG END *)
@@ -1769,7 +1769,7 @@ let build
         let () =
           Printf.printf " -- (constraint solving) --\n";
           begin
-            match TypeConstraint.try_solving crefs smap with
+            match TypeConstraint.try_solving crefs cids with
             | Ok () -> ()
             | Error(e) -> raise (ConfigError(TypeError(e)))
           end;
@@ -1856,13 +1856,13 @@ let test
 
           let (_config, package) = load_package ~use_test_files:true ~extensions abspath_in in
 
-          let (genv, _configenv, _libs_dep, _crefs_dep, _smap_dep) =
+          let (genv, _configenv, _libs_dep, _crefs_dep, _cids_dep) =
             check_depended_packages ~use_test_only_lock:true ~library_root ~extensions tyenv_prim lock_config
           in
 
           let libs =
             match PackageChecker.main tyenv_prim genv package with
-            | Ok((_ssig, libs, _crefs, _smap)) -> libs
+            | Ok((_ssig, libs, _crefs, _cids)) -> libs
             | Error(e)                         -> raise (ConfigError(e))
           in
           let (env, codebinds) = preprocess_bindings ~run_tests:true env libs in
@@ -1876,7 +1876,7 @@ let test
           Logging.lock_config_file abspath_lock_config;
           let lock_config = load_lock_config abspath_lock_config in
 
-          let (genv, configenv, libs, _crefs, _smap) =
+          let (genv, configenv, libs, _crefs, _cids) =
             check_depended_packages ~use_test_only_lock:true ~library_root ~extensions tyenv_prim lock_config
           in
 
@@ -1888,7 +1888,7 @@ let test
           in
 
           (* Typechecking and elaboration: *)
-          let (libs_local, _ast_doc, _cons, _smap) =
+          let (libs_local, _ast_doc, _crefs, _cids) =
             match PackageChecker.main_document tyenv_prim genv sorted_locals (abspath_in, utdoc) with
             | Ok(pair) -> pair
             | Error(e) -> raise (ConfigError(e))

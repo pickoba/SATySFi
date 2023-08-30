@@ -16,7 +16,7 @@ val generalize_macro_type : mono_macro_type -> poly_macro_type
 
 val lift_poly : mono_type -> poly_type
 
-val instantiate : level -> quantifiability -> poly_type -> mono_type * mono_type_constraint_reference list * poly_type_constraint_selection_map
+val instantiate : level -> quantifiability -> poly_type -> mono_type * mono_type_constraint_reference list * TypeConstraintID.t list
 
 val instantiate_by_map_mono :  mono_type BoundIDMap.t -> poly_type -> mono_type
 

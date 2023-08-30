@@ -99,31 +99,7 @@ end
 
 module EvalVarIDMap = Map.Make(EvalVarID)
 
-module TypeConstraintIDMap = struct
-
-  include Map.Make(TypeConstraintID)
-
-  let keys m =
-    bindings m |> List.map fst
-
-  let merge m1 m2 =
-    let f _ x y = match x, y with
-      | Some _, Some _ -> assert false 
-      | Some x, None   -> Some x
-      | None,   Some y -> Some y
-      | None,   None   -> None
-    in
-    merge f m1 m2
-
-  let merge_all ms =
-    List.fold_left merge empty ms
-
-  let pp pp_v fmt values =
-    iter (fun k v ->
-      Format.fprintf fmt "%a: %a" TypeConstraintID.pp k pp_v v
-    ) values
-
-end
+module TypeConstraintIDMap = Map.Make(TypeConstraintID)
 
 module OpaqueIDSet = Set.Make(TypeID)
 
@@ -448,9 +424,6 @@ type poly_macro_type =
 [@@deriving show { with_path = false }]
 
 type constructor_branch_map = poly_type ConstructorMap.t
-
-type poly_type_constraint_selection_map = poly_type_constraint_selection TypeConstraintIDMap.t
-[@@deriving show { with_path = false }]
 
 let pp_sep fmt () =
   Format.fprintf fmt ";@ "

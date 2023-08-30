@@ -6,11 +6,11 @@ type explore_result =
   | Explored of TypeError.type_error
 
 
-let make_group (crefs : mono_type_constraint_reference list) (smap : poly_type_constraint_selection_map) : mono_type_constraint_reference list =
+let make_group (crefs : mono_type_constraint_reference list) (cids : TypeConstraintID.t list) : mono_type_constraint_reference list =
   if List.length crefs = 0 then
     []
   else
-    [ConstraintRefGroup(crefs, smap |> TypeConstraintIDMap.keys)]
+    [ConstraintRefGroup(crefs, cids)]
 
 
 let solve_constraint (unifier : mono_type -> mono_type -> (unit, TypeError.unification_error) result) ((_, con) : mono_type_constraint) : (unit, TypeError.type_error) result =
@@ -54,7 +54,7 @@ let apply_substituion (subst : mono_type_substitution) (subst_row : mono_row_sub
       (range, ConstraintIdentity)
 
 
-let select_constraints (smap : poly_type_constraint_selection_map) (cids : TypeConstraintID.t list) (change_count : int) : (poly_type_constraint TypeConstraintIDMap.t * type_constraint_attribute list) list =
+let select_constraints (cids : TypeConstraintID.t list) (change_count : int) : (poly_type_constraint TypeConstraintIDMap.t * type_constraint_attribute list) list =
   let rec aux n xs =
     if n = 0 then
       [([], [])]
@@ -63,10 +63,10 @@ let select_constraints (smap : poly_type_constraint_selection_map) (cids : TypeC
       | [] -> []
       | cid :: rest ->
           let use_alts =
-            let (_, ConstraintSelection(_, alts)) =
-              match smap |> TypeConstraintIDMap.find_opt cid with
-              | Some s -> s
-              | None -> assert false (* cid should always be found in smap *)
+            let alts =
+              match TypeConstraintSelectionMap.find_opt cid with
+              | Some((_, ConstraintSelection(_, alts))) -> alts
+              | None -> assert false (* cid should always be found in map *)
             in
             aux (n - 1) rest |> List.concat_map (fun (cons, attrs) ->
               alts |> List.map (fun alt ->
@@ -82,18 +82,18 @@ let select_constraints (smap : poly_type_constraint_selection_map) (cids : TypeC
   candidates |> List.map (fun (cons, attrs) -> (cons |> List.to_seq |> TypeConstraintIDMap.of_seq, attrs))
 
 
-let resolve_constraint_id (smap : poly_type_constraint_selection_map) (selected_map : poly_type_constraint TypeConstraintIDMap.t) (tcid : TypeConstraintID.t) =
+let resolve_constraint_id (selected_map : poly_type_constraint TypeConstraintIDMap.t) (tcid : TypeConstraintID.t) =
   match selected_map |> TypeConstraintIDMap.find_opt tcid with
   | Some(con) -> con
   | None ->
       begin
-        match smap |> TypeConstraintIDMap.find_opt tcid with
+        match TypeConstraintSelectionMap.find_opt tcid with
         | Some((_, ConstraintSelection(con, _))) -> con
         | None -> assert false
       end
 
 
-let try_solving (crefs : mono_type_constraint_reference list) (smap : poly_type_constraint_selection_map) : (unit, TypeError.type_error) result =
+let try_solving (crefs : mono_type_constraint_reference list) (cids : TypeConstraintID.t list) : (unit, TypeError.type_error) result =
   let open ResultMonad in
   if List.length crefs = 0 then
     return ()
@@ -101,7 +101,7 @@ let try_solving (crefs : mono_type_constraint_reference list) (smap : poly_type_
     let rec traverse selected_map on_error cursor =
       match cursor with
       | ConstraintRef(subst, subst_row, tcid) ->
-          let poly_con = resolve_constraint_id smap selected_map tcid in
+          let poly_con = resolve_constraint_id selected_map tcid in
           let mono_con = poly_con |> apply_substituion subst subst_row in
           try_constraint mono_con |> Result.map_error (fun e -> Unexplored(e))
       | ConstraintRefGroup(crefs, cids) ->
@@ -119,7 +119,7 @@ let try_solving (crefs : mono_type_constraint_reference list) (smap : poly_type_
     let try_alternatives search_base cids original_error =
       Printf.printf " ---- ---- try alternatives ---- ----\n";
       let on_error _ _ e = e in
-      let patterns = select_constraints smap cids 1 in
+      let patterns = select_constraints cids 1 in
       let fix = patterns |> List.fold_left (fun fix (selected_map, attrs) ->
         match fix with
         | Some(_) -> fix (* Already found. *)
@@ -136,19 +136,18 @@ let try_solving (crefs : mono_type_constraint_reference list) (smap : poly_type_
       Option.value fix ~default:original_error
     in
     (* We first check the default constraints are satisfiable. If it fails, try alternative constraints. *)
-    let root = ConstraintRefGroup(crefs, TypeConstraintIDMap.keys smap) in
-    traverse TypeConstraintIDMap.empty try_alternatives root
+    traverse TypeConstraintIDMap.empty try_alternatives (ConstraintRefGroup(crefs, cids))
     |> Result.map_error (function
       | Explored(e) -> e
       | _ -> assert false
     )
 
 
-let apply_constraints_mono (crefs : mono_type_constraint_reference list) (smap : poly_type_constraint_selection_map) : (unit, TypeError.type_error) result =
+let apply_constraints_mono (crefs : mono_type_constraint_reference list) : (unit, TypeError.type_error) result =
   let open ResultMonad in
   let rec traverse = function
     | ConstraintRef(subst, subst_row, tcid) ->
-        let poly_con = resolve_constraint_id smap TypeConstraintIDMap.empty tcid in
+        let poly_con = resolve_constraint_id TypeConstraintIDMap.empty tcid in
         let mono_con = poly_con |> apply_substituion subst subst_row in
         solve_constraint Unification.unify_type mono_con
     | ConstraintRefGroup(crefs, _) ->
@@ -157,12 +156,12 @@ let apply_constraints_mono (crefs : mono_type_constraint_reference list) (smap :
   traverse (ConstraintRefGroup(crefs, []))
 
 
-let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (additional_smap : poly_type_constraint_selection_map) (pty : poly_type) : (poly_type, TypeError.type_error) result =
+let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (pty : poly_type) : (poly_type, TypeError.type_error) result =
   let open ResultMonad in
   match pty with
   | Poly(_, [], []) -> return pty
   | _ ->
-      let (mty, crefs, smap) = TypeConv.instantiate (Level.succ lev) qtfbl pty in
-      let* () = apply_constraints_mono crefs (TypeConstraintIDMap.merge smap additional_smap) in
+      let (mty, crefs, _) = TypeConv.instantiate (Level.succ lev) qtfbl pty in
+      let* () = apply_constraints_mono crefs in
       let pty = TypeConv.generalize lev mty [] [] in
       return pty
