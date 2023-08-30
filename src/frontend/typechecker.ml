@@ -906,19 +906,15 @@ and typecheck_command_arguments (tycmd : mono_type) (rngcmdapp : Range.t) (pre :
       in
       LabelMap.foldM (fun label (utast1, ty2) (e_labmap, crefsacc, smapacc) ->
         let* (e1, ty1, crefs1, smap1) = typecheck pre tyenv utast1 in
-        (* TED: TODO: smap1 does not always contain all necessary selections *)
-        let* () = TypeConstraint.try_solving crefs1 smap1 in
-        let* () = TypeConstraint.apply_constraints_mono crefs1 smap1 in
         let* () = unify ty1 ty2 in
-        return (e_labmap |> LabelMap.add label e1, Alist.append crefsacc crefs1, TypeConstraintIDMap.merge smapacc smap1)
+        let grouped_cref = TypeConstraint.make_group crefs1 smap1 in
+        return (e_labmap |> LabelMap.add label e1, Alist.append crefsacc grouped_cref, TypeConstraintIDMap.merge smapacc smap1)
       ) merged (LabelMap.empty, crefsacc, smapacc)
     in
     let* (e1, ty1, crefs1, smap1) = typecheck pre tyenv utast1 in
-    (* TED: TODO: smap1 does not always contain all necessary selections *)
-    let* () = TypeConstraint.try_solving crefs1 smap1 in
-    let* () = TypeConstraint.apply_constraints_mono crefs1 smap1 in
     let* () = unify ty1 ty2 in
-    return (Alist.extend acc (e_labmap, e1), Alist.append crefsacc crefs1, TypeConstraintIDMap.merge smapacc smap1)
+    let grouped_cref = TypeConstraint.make_group crefs1 smap1 in
+    return (Alist.extend acc (e_labmap, e1), Alist.append crefsacc grouped_cref, TypeConstraintIDMap.merge smapacc smap1)
   ) (Alist.empty, Alist.empty, TypeConstraintIDMap.empty)
   in
   return (acc |> Alist.to_list, crefsacc |> Alist.to_list, smapacc)

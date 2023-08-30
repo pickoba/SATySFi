@@ -647,24 +647,24 @@ and typecheck_declaration (tyenv : Typeenv.t) (utdecl : untyped_declaration) : (
       return (OpaqueIDMap.empty, ssig)
 
 
-let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signature abstracted * binding list) ok =
+let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signature abstracted * binding list * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   let (rng, utmodmain) = utmod in
   match utmodmain with
   | UTModVar(modchain) ->
       let* mentry = find_module_chain tyenv modchain in
       let modsig = mentry.mod_signature in
-      return ((OpaqueIDMap.empty, modsig), [])
+      return ((OpaqueIDMap.empty, modsig), [], [], TypeConstraintIDMap.empty)
 
   | UTModBinds(utbinds) ->
-      let* ((quant, ssig), binds) = typecheck_binding_list tyenv utbinds in
-      return ((quant, ConcStructure(ssig)), binds)
+      let* ((quant, ssig), binds, crefs, smap) = typecheck_binding_list tyenv utbinds in
+      return ((quant, ConcStructure(ssig)), binds, crefs, smap)
 
   | UTModFunctor(modident1, utsig1, utmod2) ->
       let (_, modnm1) = modident1 in
       let* absmodsig1 = typecheck_signature tyenv utsig1 in
       let (quant1, modsig1) = absmodsig1 in
-      let* (absmodsig2, _binds2) =
+      let* (absmodsig2, _binds2, crefs, smap) =
         let mentry1 = { mod_signature = modsig1; } in
         let tyenv = tyenv |> Typeenv.add_module modnm1 mentry1 in
         typecheck_module tyenv utmod2
@@ -678,7 +678,7 @@ let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signatu
         }
       in
       let absmodsig = (OpaqueIDMap.empty, ConcFunctor(fsig)) in
-      return (absmodsig, [])
+      return (absmodsig, [], crefs, smap)
 
   | UTModApply(modchain1, modchain2) ->
       let* mentry1 = find_module_chain tyenv modchain1 in
@@ -702,7 +702,7 @@ let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signatu
                   let* subst =
                     SignatureSubtyping.subtype_concrete_with_abstract rng modsig2 (quant1, modsig_dom1)
                   in
-                  let* ((_, modsig0), binds) =
+                  let* ((_, modsig0), binds, crefs, smap) =
                     let mentry0 = { mod_signature = modsig2; } in
                     typecheck_module (tyenv0 |> Typeenv.add_module modnm0 mentry0) utmod0
                   in
@@ -710,7 +710,7 @@ let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signatu
                     absmodsig_cod1 |> SignatureSubtyping.substitute_abstract subst
                   in
                   let absmodsig = (quant1_subst, copy_contents modsig0 modsig_cod1_subst) in
-                  return (absmodsig, binds)
+                  return (absmodsig, binds, crefs, smap)
 
               | _ ->
                   assert false
@@ -722,10 +722,10 @@ let rec typecheck_module (tyenv : Typeenv.t) (utmod : untyped_module) : (signatu
       let modsig1 = mentry1.mod_signature in
       let* absmodsig2 = typecheck_signature tyenv utsig2 in
       let* absmodsig = coerce_signature rng modsig1 absmodsig2 in
-      return (absmodsig, [])
+      return (absmodsig, [], [], TypeConstraintIDMap.empty)
 
 
-and typecheck_binding_list (tyenv : Typeenv.t) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list) ok =
+and typecheck_binding_list (tyenv : Typeenv.t) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   let* (binds, (quant, ssig), crefsacc, smapacc) =
     let* (bindacc, _tyenv, quantacc, ssigacc, crefsacc, smapacc) =
@@ -741,10 +741,7 @@ and typecheck_binding_list (tyenv : Typeenv.t) (utbinds : untyped_binding list) 
     in
     return (Alist.to_list bindacc, (quantacc, ssigacc), crefsacc, smapacc)
   in
-  (* TED: Constraints should be solved / checked here *)
-  let* () = TypeConstraint.try_solving crefsacc smapacc in
-  let* ssig = TypeConstraint.apply_constraints_ssig smapacc ssig in
-  return ((quant, ssig), binds)
+  return ((quant, ssig), binds, TypeConstraint.make_group crefsacc smapacc, smapacc)
 
 
 and typecheck_nonrec (pre : pre) (tyenv : Typeenv.t) (ident : var_name ranged) (utast1 : untyped_abstract_tree) (ty_expected_opt : mono_type option) =
@@ -873,7 +870,7 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
 
   | UTBindModule(modident, utsigopt2, utmod1) ->
       let (rng_mod, modnm) = modident in
-      let* (absmodsig1, binds1) = typecheck_module tyenv utmod1 in
+      let* (absmodsig1, binds1, crefs1, smap1) = typecheck_module tyenv utmod1 in
       let* (quant, modsig) =
         match utsigopt2 with
         | None ->
@@ -888,7 +885,7 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
         let mentry = { mod_signature = modsig; } in
         StructSig.empty |> StructSig.add_module modnm mentry
       in
-      return (binds1, (quant, ssig), [], TypeConstraintIDMap.empty)
+      return (binds1, (quant, ssig), crefs1, smap1)
 
   | UTBindSignature((_, signm), utsig) ->
       let* absmodsig = typecheck_signature tyenv utsig in
@@ -896,12 +893,12 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
       return ([], (OpaqueIDMap.empty, ssig), [], TypeConstraintIDMap.empty)
 
   | UTBindInclude(utmod) ->
-      let* (absmodsig, binds) = typecheck_module tyenv utmod in
+      let* (absmodsig, binds, crefs, smap) = typecheck_module tyenv utmod in
       let (quant, modsig) = absmodsig in
       begin
         match modsig with
         | ConcStructure(ssig) ->
-            return (binds, (quant, ssig), [], TypeConstraintIDMap.empty)
+            return (binds, (quant, ssig), crefs, smap)
 
         | ConcFunctor(fsig) ->
             let (rng_mod, _) = utmod in
@@ -963,14 +960,14 @@ and typecheck_binding (tyenv : Typeenv.t) (utbind : untyped_binding) : (binding 
       return (binds, (OpaqueIDMap.empty, ssig), crefs1, smap1)
 
 
-let main (tyenv : Typeenv.t) (absmodsig_opt : (signature abstracted) option) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list) ok =
+let main (tyenv : Typeenv.t) (absmodsig_opt : (signature abstracted) option) (utbinds : untyped_binding list) : (StructSig.t abstracted * binding list * mono_type_constraint_reference list * poly_type_constraint_selection_map) ok =
   let open ResultMonad in
   match absmodsig_opt with
   | None ->
       typecheck_binding_list tyenv utbinds
 
   | Some(absmodsig) ->
-      let* ((_, ssig), binds) = typecheck_binding_list tyenv utbinds in
+      let* ((_, ssig), binds, crefs, smap) = typecheck_binding_list tyenv utbinds in
       let rng = Range.dummy "main_bindings" in (* TODO (error): give appropriate ranges *)
       let* (quant, modsig) = coerce_signature rng (ConcStructure(ssig)) absmodsig in
       let ssig =
@@ -978,4 +975,4 @@ let main (tyenv : Typeenv.t) (absmodsig_opt : (signature abstracted) option) (ut
         | ConcFunctor(_)      -> assert false
         | ConcStructure(ssig) -> ssig
       in
-      return ((quant, ssig), binds)
+      return ((quant, ssig), binds, crefs, smap)

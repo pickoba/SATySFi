@@ -1,5 +1,17 @@
-open StaticEnv
 open Types
+
+
+type explore_result =
+  | Unexplored of TypeError.type_error
+  | Explored of TypeError.type_error
+
+
+let make_group (crefs : mono_type_constraint_reference list) (smap : poly_type_constraint_selection_map) : mono_type_constraint_reference list =
+  if List.length crefs = 0 then
+    []
+  else
+    [ConstraintRefGroup(crefs, smap |> TypeConstraintIDMap.keys)]
+
 
 let solve_constraint (unifier : mono_type -> mono_type -> (unit, TypeError.unification_error) result) ((_, con) : mono_type_constraint) : (unit, TypeError.type_error) result =
   match con with
@@ -42,56 +54,43 @@ let apply_substituion (subst : mono_type_substitution) (subst_row : mono_row_sub
       (range, ConstraintIdentity)
 
 
-let resolve_constraint_reference (selected_map : poly_type_constraint TypeConstraintIDMap.t) (cref : mono_type_constraint_reference) : mono_type_constraint =
-  match cref with
-  | ConstraintRef(subst, subst_row, tcid) ->
-      match selected_map |> TypeConstraintIDMap.find_opt tcid with
-      | Some(con) -> con |> apply_substituion subst subst_row
-      | None ->
-          (* TED: JUST FOR DEBUG START *)
-          let () =
-            Printf.printf "constraint reference:\n";
-            Printf.printf "[%s]\n" (cref |> Display.show_mono_type_constraint_reference);
-            Printf.printf "selection map:\n";
-            Printf.printf "[%s]\n" (selected_map |> TypeConstraintIDMap.bindings |> List.map (fun (id, sel) -> Printf.sprintf "%s -> %s" (TypeConstraintID.show id) (Display.show_poly_type_constraint sel)) |> String.concat ", ");
-          in
-          (* TED: JUST FOR DEBUG END*)
-          assert false
-
-
-let select_constraints (smap : poly_type_constraint_selection_map) (change_count : int) : (poly_type_constraint TypeConstraintIDMap.t * type_constraint_attribute list) list =
+let select_constraints (smap : poly_type_constraint_selection_map) (cids : TypeConstraintID.t list) (change_count : int) : (poly_type_constraint TypeConstraintIDMap.t * type_constraint_attribute list) list =
   let rec aux n xs =
-    match xs with
-    | [] -> [([], [])]
-    | (tcid, (_, ConstraintSelection(con, alts))) :: rest ->
-        let use_default =
-          if List.length rest + 1 <= n then
-            []
-          else
-            aux n rest |> List.map (fun (cons, attrs) -> ((tcid, con) :: cons, attrs))
-        in
-        let use_alts =
-          if n = 0 then
-            []
-          else
+    if n = 0 then
+      [([], [])]
+    else
+      match xs with
+      | [] -> []
+      | cid :: rest ->
+          let use_alts =
+            let (_, ConstraintSelection(_, alts)) =
+              match smap |> TypeConstraintIDMap.find_opt cid with
+              | Some s -> s
+              | None -> assert false (* cid should always be found in smap *)
+            in
             aux (n - 1) rest |> List.concat_map (fun (cons, attrs) ->
               alts |> List.map (fun alt ->
                 match alt with
-                | (_, ConstraintBranch(con, attr)) -> ((tcid, con) :: cons, attr :: attrs)
-                | (r, ConstraintBranchAny(attr)) -> ((tcid, (r, ConstraintIdentity)) :: cons, attr :: attrs)
+                | (_, ConstraintBranch(con, attr)) -> ((cid, con) :: cons, attr :: attrs)
+                | (r, ConstraintBranchAny(attr)) -> ((cid, (r, ConstraintIdentity)) :: cons, attr :: attrs)
               )
             )
-        in
-        use_default @ use_alts
+          in
+          aux n rest @ use_alts
   in
-  let candidates = aux change_count (smap |> TypeConstraintIDMap.bindings) in
+  let candidates = aux change_count cids in
   candidates |> List.map (fun (cons, attrs) -> (cons |> List.to_seq |> TypeConstraintIDMap.of_seq, attrs))
 
 
-let select_default_constraints (smap : poly_type_constraint_selection_map) : poly_type_constraint TypeConstraintIDMap.t =
-  match select_constraints smap 0 with
-  | [(selected_map, _)] -> selected_map
-  | _ -> assert false
+let resolve_constraint_id (smap : poly_type_constraint_selection_map) (selected_map : poly_type_constraint TypeConstraintIDMap.t) (tcid : TypeConstraintID.t) =
+  match selected_map |> TypeConstraintIDMap.find_opt tcid with
+  | Some(con) -> con
+  | None ->
+      begin
+        match smap |> TypeConstraintIDMap.find_opt tcid with
+        | Some((_, ConstraintSelection(con, _))) -> con
+        | None -> assert false
+      end
 
 
 let try_solving (crefs : mono_type_constraint_reference list) (smap : poly_type_constraint_selection_map) : (unit, TypeError.type_error) result =
@@ -99,47 +98,63 @@ let try_solving (crefs : mono_type_constraint_reference list) (smap : poly_type_
   if List.length crefs = 0 then
     return ()
   else
-    let try_with_map selected_map =
-      let unimap = UnificationMap.freeze () in
-      let unirowmap = UnificationRowMap.freeze () in
-      let cons = crefs |> List.map (resolve_constraint_reference selected_map) in
-      let res = cons |> mapM try_constraint in
-      UnificationRowMap.restore unirowmap;
-      UnificationMap.restore unimap;
-      res
+    let rec traverse selected_map on_error cursor =
+      match cursor with
+      | ConstraintRef(subst, subst_row, tcid) ->
+          let poly_con = resolve_constraint_id smap selected_map tcid in
+          let mono_con = poly_con |> apply_substituion subst subst_row in
+          try_constraint mono_con |> Result.map_error (fun e -> Unexplored(e))
+      | ConstraintRefGroup(crefs, cids) ->
+          let unimap = UnificationMap.freeze () in
+          let unirowmap = UnificationRowMap.freeze () in
+          match crefs |> iterM (traverse selected_map on_error) with
+          | Error(Unexplored(e)) ->
+              (* Restore the state. *)
+              UnificationRowMap.restore unirowmap;
+              UnificationMap.restore unimap;
+              (* TED: TODO: Should cids of child elements also be considered? *)
+              err @@ Explored(on_error cursor cids e)
+          | other -> other
     in
-    let try_alternatives original_error change_count =
-      let patterns = select_constraints smap change_count in
-      let* _ = patterns |> mapM (fun (selected_map, attrs) ->
-        match try_with_map selected_map with
-        | Ok(_) ->
-            (* This fix actually eliminated the type error. *)
-            err @@ TypeError.ConstraintError(attrs, original_error)
-        | Error(_) ->
-            (* The error remains, so try other candidate fixes. *)
-            return ()
-      ) in
-      return ()
+    let try_alternatives search_base cids original_error =
+      Printf.printf " ---- ---- try alternatives ---- ----\n";
+      let on_error _ _ e = e in
+      let patterns = select_constraints smap cids 1 in
+      let fix = patterns |> List.fold_left (fun fix (selected_map, attrs) ->
+        match fix with
+        | Some(_) -> fix (* Already found. *)
+        | None ->
+            match traverse selected_map on_error search_base with
+            | Ok(_) ->
+                (* This fix actually eliminated the type error. *)
+                Some(TypeError.ConstraintError(attrs, original_error))
+            | Error(_) ->
+                (* The error remains, so try other candidate fixes. *)
+                Printf.printf " ---- ---- ---- ------ ---- ---- ----\n";
+                None
+      ) None in
+      Option.value fix ~default:original_error
     in
     (* We first check the default constraints are satisfiable. If it fails, try alternative constraints. *)
-    Printf.printf " ---- ---- (try solving) ---- ----\n";
-    match try_with_map (select_default_constraints smap) with
-    | Ok(_) ->
-        Printf.printf "OK\n";
-        return ()
-    | Error(e) ->
-        Printf.printf " ---- - (try alternatives) -- ----\n";
-        let* () = try_alternatives e 1 in
-        (* None of the candidate fixes could correct the type error, so the original error is returned. *)
-        err e
+    let root = ConstraintRefGroup(crefs, TypeConstraintIDMap.keys smap) in
+    traverse TypeConstraintIDMap.empty try_alternatives root
+    |> Result.map_error (function
+      | Explored(e) -> e
+      | _ -> assert false
+    )
 
 
 let apply_constraints_mono (crefs : mono_type_constraint_reference list) (smap : poly_type_constraint_selection_map) : (unit, TypeError.type_error) result =
   let open ResultMonad in
-  let selected_map = select_default_constraints smap in
-  let cons = crefs |> List.map (resolve_constraint_reference selected_map) in
-  let* _ = cons |> mapM (solve_constraint Unification.unify_type) in
-  return ()
+  let rec traverse = function
+    | ConstraintRef(subst, subst_row, tcid) ->
+        let poly_con = resolve_constraint_id smap TypeConstraintIDMap.empty tcid in
+        let mono_con = poly_con |> apply_substituion subst subst_row in
+        solve_constraint Unification.unify_type mono_con
+    | ConstraintRefGroup(crefs, _) ->
+        crefs |> iterM traverse
+  in
+  traverse (ConstraintRefGroup(crefs, []))
 
 
 let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (additional_smap : poly_type_constraint_selection_map) (pty : poly_type) : (poly_type, TypeError.type_error) result =
@@ -151,26 +166,3 @@ let apply_constraints_poly (lev : level) (qtfbl : quantifiability) (additional_s
       let* () = apply_constraints_mono crefs (TypeConstraintIDMap.merge smap additional_smap) in
       let pty = TypeConv.generalize lev mty [] [] in
       return pty
-
-  
-let apply_constraints_ssig (additional_map : poly_type_constraint_selection_map) (ssig : StructSig.t) : (StructSig.t, TypeError.type_error) result =
-  let open ResultMonad in
-  ssig |> StructSig.mapM
-    ~v:(fun _ ventry ->
-      let* val_type = apply_constraints_poly Level.bottom Quantifiable additional_map ventry.val_type in
-      (* TED: JUST FOR DEBUG START *)
-      let () =
-        match ventry.val_type with
-        | Poly(_, [], []) -> ()
-        | _ ->
-            Printf.printf "from: %s, to: %s\n" (Display.show_poly_type ventry.val_type) (Display.show_poly_type val_type)
-      in
-      (* TED: JUST FOR DEBUG END *)
-      return { ventry with val_type = val_type }
-    )
-    ~a:(fun _ mentry -> return mentry)
-    ~c:(fun _ centry -> return centry)
-    ~f:(fun _ pt -> return pt)
-    ~t:(fun _ tentry -> return tentry)
-    ~m:(fun _ mentry -> return mentry)
-    ~s:(fun _ absmodsig -> return absmodsig)

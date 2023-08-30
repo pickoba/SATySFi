@@ -181,9 +181,11 @@ and substitute_poly_type (subst : substitution) (Poly(pty, cons, smap) : poly_ty
     | CommandArgType(ptylabmap, pty) -> CommandArgType(ptylabmap |> LabelMap.map aux, aux pty)
   in
 
-  let aux_constraint_reference = function
+  let rec aux_constraint_reference = function
     | ConstraintRef(subst, subst_row, tcid) ->
         ConstraintRef(subst |> BoundIDMap.map aux, subst_row |> BoundRowIDMap.map aux_option_row, tcid)
+    | ConstraintRefGroup(crefs, cids) ->
+        ConstraintRefGroup(crefs |> List.map aux_constraint_reference, cids)
   in
 
   let rec aux_constraint_selection = function

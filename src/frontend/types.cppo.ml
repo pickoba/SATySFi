@@ -103,6 +103,9 @@ module TypeConstraintIDMap = struct
 
   include Map.Make(TypeConstraintID)
 
+  let keys m =
+    bindings m |> List.map fst
+
   let merge m1 m2 =
     let f _ x y = match x, y with
       | Some _, Some _ -> assert false 
@@ -161,6 +164,7 @@ type 'a row_substitution =
 
 type ('a, 'b) type_constraint_reference =
 	| ConstraintRef of 'a type_substitution * 'b row_substitution * TypeConstraintID.t
+  | ConstraintRefGroup of ('a, 'b) type_constraint_reference list * TypeConstraintID.t list
 [@@deriving show]
 
 type manual_type =

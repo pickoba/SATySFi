@@ -4,4 +4,5 @@ val err : 'e -> ('a, 'e) result
 val ( let* ) : ('a, 'e) result -> ('a -> ('b, 'e) result) -> ('b, 'e) result
 val foldM : ('a -> 'b -> ('a, 'e) result) -> 'a -> 'b list -> ('a, 'e) result
 val mapM : ('a -> ('b, 'e) result) -> 'a list -> ('b list, 'e) result
+val iterM : ('a -> (unit, 'e) result) -> 'a list -> (unit, 'e) result
 val optionM : ('a -> ('b, 'e) result) -> 'a option -> ('b option, 'e) result

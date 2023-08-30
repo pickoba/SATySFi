@@ -179,11 +179,15 @@ let instantiate_constraint_selections bid_ht brid_ht (sels : poly_type_constrain
 
 
 let instantiate_constraint_reference intern_ty intern_row (cref : poly_type_constraint_reference) =
-  match cref with
-  | ConstraintRef(subst, subst_row, tcid) ->
-      let subst_new = subst |> BoundIDMap.map (instantiate_impl intern_ty intern_row) in
-      let subst_row_new = subst_row |> BoundRowIDMap.map (instantiate_row_impl intern_ty intern_row) in
-      ConstraintRef(subst_new, subst_row_new, tcid)
+  let rec aux = function
+    | ConstraintRef(subst, subst_row, tcid) ->
+        let subst_new = subst |> BoundIDMap.map (instantiate_impl intern_ty intern_row) in
+        let subst_row_new = subst_row |> BoundRowIDMap.map (instantiate_row_impl intern_ty intern_row) in
+        ConstraintRef(subst_new, subst_row_new, tcid)
+    | ConstraintRefGroup(crefs, cids) ->
+        ConstraintRefGroup(crefs |> List.map aux, cids)
+  in
+  aux cref
 
 
 let instantiate (lev : level) (qtfbl : quantifiability) ((Poly(pty, crefs, sels)) : poly_type) : mono_type * mono_type_constraint_reference list * poly_type_constraint_selection_map =
@@ -410,11 +414,15 @@ let generalize_constraint_selection intern_ty intern_row (rng, ConstraintSelecti
 
 
 let generalize_constraint_reference intern_ty intern_row (cref : mono_type_constraint_reference) =
-  match cref with
-  | ConstraintRef(subst, subst_row, tcid) ->
-      let subst_new = subst |> BoundIDMap.map (generalize_impl intern_ty intern_row) in
-      let subst_row_new = subst_row |> BoundRowIDMap.map (generalize_row_impl intern_ty intern_row LabelSet.empty) in
-      ConstraintRef(subst_new, subst_row_new, tcid)
+  let rec aux = function
+    | ConstraintRef(subst, subst_row, tcid) ->
+        let subst_new = subst |> BoundIDMap.map (generalize_impl intern_ty intern_row) in
+        let subst_row_new = subst_row |> BoundRowIDMap.map (generalize_row_impl intern_ty intern_row LabelSet.empty) in
+        ConstraintRef(subst_new, subst_row_new, tcid)
+    | ConstraintRefGroup(crefs, cids) ->
+        ConstraintRefGroup(crefs |> List.map aux, cids)
+  in
+  aux cref
 
 
 let generalize (lev : level) (ty : mono_type) (crefs : mono_type_constraint_reference list) (sels : mono_type_constraint_selection list) : poly_type =

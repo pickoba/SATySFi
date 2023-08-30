@@ -22,6 +22,11 @@ let mapM f vs =
   ) Alist.empty >>= fun acc ->
   return (Alist.to_list acc)
 
+let iterM f vs =
+  vs |> foldM (fun () v ->
+    f v
+  ) ()
+
 let optionM f = function
   | None    -> return None
   | Some(v) -> f v >>= fun y -> return @@ Some(y)

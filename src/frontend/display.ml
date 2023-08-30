@@ -450,10 +450,14 @@ let show_row_substitution (dispmap : DisplayMap.t) (show_row : 'a -> string opti
   ) |> BoundRowIDMap.bindings |> List.map snd |> String.concat ", "
 
 
-let show_type_constraint_reference (dispmap : DisplayMap.t) (show_type : 'a -> string) (show_row : 'b -> string option) (cref : ('a, 'b) type_constraint_reference) =
+let rec show_type_constraint_reference (dispmap : DisplayMap.t) (show_type : 'a -> string) (show_row : 'b -> string option) (cref : ('a, 'b) type_constraint_reference) =
   match cref with
   | ConstraintRef(subst, subst_row, tcid) ->
       Printf.sprintf "(%s, %s, %s)" (show_type_substitution dispmap show_type subst) (show_row_substitution dispmap show_row subst_row) (TypeConstraintID.show tcid)
+  | ConstraintRefGroup(crefs, cids) ->
+      Printf.sprintf "Group([%s], [%s])"
+        (crefs |> List.map (show_type_constraint_reference dispmap show_type show_row) |> String.concat ", ")
+        (cids |> List.map TypeConstraintID.show |> String.concat ", ")
 
 
 let rec show_poly_row_by_map (dispmap : DisplayMap.t) (prow : poly_row) : string option =
