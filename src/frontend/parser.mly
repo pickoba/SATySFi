@@ -815,7 +815,7 @@ typ_macro_arg:
 typ_constraint:
   | tok=CONSTRAINT; con=typ_constraint_expr
       { let rng = make_range (Tok tok) (Ranged con) in (rng, ConstraintSelection(con, [])) }
-  | tokL=CONSTRAINT; TRY; con=typ_constraint_expr; WITH; BAR?; alts=separated_nonempty_list(BAR, typ_constraint_branch); tokR=END
+  | tokL=CONSTRAINT; TRY; con=typ_constraint_expr; ELSE; BAR?; alts=separated_nonempty_list(BAR, typ_constraint_branch); tokR=END
       { 
         let rng = make_range (Tok tokL) (Tok tokR) in
         (rng, ConstraintSelection(con, alts))
