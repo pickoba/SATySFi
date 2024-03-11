@@ -1638,6 +1638,8 @@ let build
     ~(no_default_config : bool)
 =
   error_log_environment (fun () ->
+    (* let time_all_start = Unix.gettimeofday () in *)
+
     let curdir = Sys.getcwd () in
 
     let input_file = make_absolute_if_relative ~origin:curdir fpath_in in
@@ -1700,6 +1702,7 @@ let build
     in
 
     let extensions = get_candidate_file_extensions output_mode in
+    let time_before_initialize = Unix.gettimeofday () in
     let (tyenv_prim, env) = initialize () in
 
     match build_input with
@@ -1736,11 +1739,13 @@ let build
         let dump_file_exists = CrossRef.initialize abspath_dump in
         Logging.dump_file ~already_exists:dump_file_exists abspath_dump;
 
+        let time_before_check_depended_packages = Unix.gettimeofday () in
         let (genv, configenv, libs, crefs_dep, cids_dep) =
           check_depended_packages ~use_test_only_lock:false ~library_root ~extensions tyenv_prim lock_config
         in
 
         (* Resolve dependency of the document and the local source files: *)
+        let time_before_resolve = Unix.gettimeofday () in
         let (sorted_locals, utdoc) =
           match OpenFileDependencyResolver.main ~extensions input_kind configenv abspath_in with
           | Ok(pair) -> pair
@@ -1748,6 +1753,7 @@ let build
         in
 
         (* Typechecking and elaboration: *)
+        let time_before_typecheck = Unix.gettimeofday () in
         let (libs_local, ast_doc, cref_doc, cids_doc) =
           match PackageChecker.main_document tyenv_prim genv sorted_locals (abspath_in, utdoc) with
           | Ok(pair) -> pair
@@ -1774,6 +1780,15 @@ let build
             | Error(e) -> raise (ConfigError(TypeError(e)))
           end;
           Printf.printf " --------------------------\n"
+        in
+        let time_end = Unix.gettimeofday () in
+        let () =
+          (* Printf.printf "TIME: first: %f sec\n" (time_before_initialize -. time_all_start); *)
+          Printf.printf "TIME: initialize: %f sec\n" (time_before_check_depended_packages -. time_before_initialize);
+          Printf.printf "TIME: parsing dependent packages: %f sec\n" (time_before_resolve -. time_before_check_depended_packages);
+          Printf.printf "TIME: parsing this package and make dependency graph: %f sec\n" (time_before_typecheck -. time_before_resolve);
+          Printf.printf "TIME: type checking: %f sec\n" (time_end -. time_before_typecheck);
+          (* Printf.printf "TIME: total: %f sec\n" (time_end -. time_all_start) *)
         in
         (* TED: solve constraints END *)
         if type_check_only then
